@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+conda-env/
+
+# Qlib 数据（外部下载，不纳入版本控制）
+../qlib_data/
+*.bin
+
+# 日志
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.bak
+
+# 环境变量（敏感信息）
+.env
+.env.local
+
+# 实验结果和缓存
+experiments/
+results/
+*.pkl
+*.joblib
+*.h5

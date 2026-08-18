@@ -50,9 +50,23 @@ for f in fields:
 
 print("\n=== 加载数据 ===")
 
-instruments = D.instruments(market="csi300")
 start_time = "2022-01-01"
 end_time = "2023-12-31"
+
+# 获取 csi300 股票列表（直接读取成分股文件，最可靠）
+import os
+inst_file = "C:/Users/jay/qlib_data/cn_data/instruments/csi300.txt"
+instruments = []
+if os.path.exists(inst_file):
+    with open(inst_file, "r") as f:
+        for line in f:
+            parts = line.strip().split("\t")
+            if len(parts) >= 1 and parts[0]:
+                instruments.append(parts[0])
+    # 去重
+    instruments = list(dict.fromkeys(instruments))
+print(f"CSI300 股票数量：{len(instruments)}")
+print(f"前 5 只：{instruments[:5]}")
 
 df = D.features(
     instruments=instruments,

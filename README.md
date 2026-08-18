@@ -14,12 +14,28 @@
 
 ```
 quant_factors/
-├── AGENTS.md                  # AI 协作方法论（Trae 自动加载）
-├── examples/
-│   └── amplitude_test.py      # 振幅突破因子 IC/IR 测试
+├── AGENTS.md                  # AI 协作方法论
+├── .env                       # 环境变量（QLIB_URI / OPENAI_API_KEY）
 ├── .gitignore
-└── README.md
+├── README.md
+├── src/                       # 正式代码区（待开发）
+│   └── README.md
+├── playground/                # 学习/实验区
+│   ├── README.md
+│   └── qlib_data_fetch.py     # Qlib 数据获取验证脚本（已跑通）
+└── examples/
+    └── amplitude_test.py      # 振幅因子 IC/IR 测试（已跑通）
 ```
+
+## 目录规划（边学习边开发）
+
+| 目录 | 性质 | 是否入库 | 说明 |
+|------|------|---------|------|
+| `src/` | 正式区 | ✅ | 经过验证、可复用的正式代码 |
+| `playground/` | 学习/实验区 | ✅ | 临时探索、学习笔记、实验脚本 |
+| 本地数据 | 数据区 | ❌ | `C:/Users/jay/qlib_data/cn_data` |
+
+**核心原则**：学习/实验代码先在 `playground/` 验证，满足提升标准后才进入 `src/`，不污染正式区。
 
 ## 快速开始
 

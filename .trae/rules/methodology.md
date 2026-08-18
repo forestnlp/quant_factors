@@ -1,57 +1,11 @@
-# AGENTS.md — 量化因子项目 AI 协作指南
-
-本文件是项目级 AI 协作指南，Trae 会在每次会话中自动加载。所有编码行为必须遵循本文件的方法论与约束。
-
+---
+alwaysApply: true
+description: 量化因子项目（quant_factors）的开发方法论，所有开发任务始终生效。
 ---
 
-## 项目定位（Project-Specific Guidelines for quant_factors）
+# 开发方法论（quant_factors）
 
-### 项目概述
-- **名称**: quant_factors（量化因子开发系统）
-- **目标**: **RD-Agent（自动化因子挖掘）+ Qlib（数据 / 因子 / 研究）+ Backtrader（策略回测）三者联合应用**，构建"数据 → 因子挖掘 → 回测验证"的完整闭环。
-- **核心原则**: 下载的数据**最好保存在本地**，不依赖每次联网，方案要服从本地数据与环境的真实情况。
-- **环境**: Conda 环境 `qlib_rdagent`（Python 3.10）；Qlib 0.9.7、RD-Agent 已装，**Backtrader 尚未安装**（需要时安装）。
-- **本地数据目录**: `C:/Users/jay/qlib_data/cn_data`（已有 calendars / features / instruments）。
-
-### 技术分工（抓主要矛盾）
-- **Qlib**: 负责数据加载、因子表达式计算、因子研究（IC/IR）。
-- **RD-Agent**: 负责自动化因子挖掘与迭代。
-- **Backtrader**: 负责策略回测与绩效分析。
-- 三者以"Qlib 数据 → 因子 → 回测"为主线串联，避免职责混乱。
-
-### 代码风格规则
-- **Python**: 遵循 PEP 8，公开 API 使用类型注解与 docstring。
-- **命名**: 统一 `snake_case`。
-- **注释**: 中文项目使用中文注释。
-- **配置**: 环境变量与路径配置集中在 `.env` / 配置文件中，不硬编码。
-
-### 测试与验证期望
-- 新功能需有可验证的成功标准（见下方第 4 条）。
-- 使用 pytest 编写测试；外部服务（网络下载、API）进行 mock 或本地化。
-
-### 部署 / 运行
-- 保持数据本地化，方案服从 `C:/Users/jay/qlib_data/cn_data` 的真实数据情况。
-- 配置尽量使用环境变量。
-
-### 目录规划（边学习边开发模式）
-
-项目采用**三区隔离**，避免学习/实验代码污染正式区：
-
-| 目录 | 性质 | 是否入库 | 说明 |
-|------|------|---------|------|
-| `src/` | **正式区** | ✅ 版本控制 | 经过验证、可复用的正式代码，扁平结构 |
-| `playground/` | **学习/实验区** | ✅ 版本控制 | 临时探索、学习笔记、实验脚本，不保证稳定 |
-| 本地数据 | 数据区 | ❌ gitignore | `C:/Users/jay/qlib_data/cn_data`，不纳入版本控制 |
-
-**核心原则**：
-
-1. **不污染正式区** — 学习/实验代码不得直接写入 `src/`，先在 `playground/` 验证。
-2. **提升标准** — 从 `playground/` 提升到 `src/` 需满足：逻辑正确且通过验证、可复用、有清晰接口与文档、不依赖实验环境。
-3. **playground 临时性** — `playground/` 内容为学习性质，随时可清理或重写，不保证稳定。
-4. **数据本地化** — 数据保存在本地，不依赖每次联网。
-5. **验证闭环** — 每个实验脚本自带可验证的成功标准，跑通后再决定是否提升。
-
----
+本规则为项目级全局规范，当前项目所有开发任务统一生效。
 
 ## 0. 毛选方法论（工作总纲）
 
@@ -65,8 +19,6 @@
 6. **具体问题具体分析** — 每个任务结合其上下文判断，不机械照搬规则。
 
 > 总纲：先调研 → 抓主要矛盾 → 聚焦歼灭 → 动态闭环。与下方 1-4 条细则配合使用。
-
----
 
 ## 1. Think Before Coding
 
@@ -85,8 +37,6 @@ Before implementing:
 - ❌ Hiding confusion and proceeding anyway
 - ❌ Picking one interpretation without surfacing alternatives
 - ❌ Continuing when confused instead of asking
-
----
 
 ## 2. Simplicity First
 
@@ -109,8 +59,6 @@ Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, sim
 - ❌ Adding configuration options nobody asked for
 - ❌ Handling edge cases that can't happen in this context
 - ❌ Over-engineering simple problems
-
----
 
 ## 3. Surgical Changes
 
@@ -139,8 +87,6 @@ When your changes create orphans:
 - ❌ Deleting dead code you noticed but didn't create
 - ❌ Changing comments you don't fully understand
 
----
-
 ## 4. Goal-Driven Execution
 
 **Define success criteria. Loop until verified.**
@@ -165,8 +111,6 @@ For multi-step tasks, state a brief plan:
 **Strong success criteria** let you loop independently.
 **Weak criteria** ("make it work") require constant clarification.
 
----
-
 ## How to Know These Guidelines Are Working
 
 ✅ **Good signs**:
@@ -184,7 +128,5 @@ For multi-step tasks, state a brief plan:
 - "While I'm here" scope creep
 - Over-engineered solutions for simple problems
 - Code style changes unrelated to the task
-
----
 
 **Remember**: These guidelines are working if you see fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

@@ -8,8 +8,14 @@
     4. 逐日计算 IC / RankIC，并汇总 IC 均值、ICIR、RankIC 均值、RankICIR
     5. 输出评估结果表格
 
+改进点：
+    - 一次加载全部因子（不再一因子一 Handler，减少 IO）
+    - 增加截面缩尾 + 稳健标准化预处理（按每日截面，无未来函数）
+    - 行情读取带 horizon 尾部缓冲，避免末尾标签缺失
+    - 数据路径从 .env 的 QLIB_URI 读取，不硬编码
+
 用法：
-    conda run -n qlib_rdagent python playground/factor_ic_ir_pipeline.py
+    conda run -n jaycode python playground/factor_ic_ir_pipeline.py
 
 成功标准：
     脚本无异常退出，打印每个因子的 IC / ICIR / RankIC / RankICIR 汇总表。
@@ -21,16 +27,36 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-import qlib
-from qlib.data import D
-from qlib.data.dataset import DatasetH
-from qlib.data.dataset.handler import DataHandlerLP
-from qlib.contrib.eva.alpha import calc_ic
+# 项目根目录
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+# 将 mlflow 的配置与跟踪目录重定向到项目内（避免沙箱拦截 ~/.config/mlflow）。
+# 必须在 import qlib / mlflow 之前设置才生效。
+os.environ.setdefault("XDG_CONFIG_HOME", str(PROJECT_ROOT / "data" / ".config"))
+os.environ.setdefault("MLFLOW_TRACKING_URI", str(PROJECT_ROOT / "data" / "mlruns"))
+
+import qlib  # noqa: E402
+from qlib.data.dataset import DatasetH  # noqa: E402
+from qlib.data.dataset.handler import DataHandlerLP  # noqa: E402
+from qlib.contrib.eva.alpha import calc_ic  # noqa: E402
+
 
 # ---------- 配置 ----------
-QLIB_URI = os.getenv("QLIB_URI", "C:/Users/jay/qlib_data/cn_data")
+# 优先取环境变量 QLIB_URI，其次 .env，最后回退相对项目根的 data/cn_data
+_env = {}
+if (PROJECT_ROOT / ".env").exists():
+    for line in (PROJECT_ROOT / ".env").read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        _env[key.strip()] = val.strip()
+
+QLIB_URI = os.getenv("QLIB_URI", _env.get("QLIB_URI", str(PROJECT_ROOT / "data" / "cn_data")))
+
+# 数据区间需落在已下载的 qlib 数据范围内（investment_data 日更，最新至 2026-08-13）
 START_TIME = "2023-08-01"   # 近 3 年
-END_TIME = "2026-08-13"
+END_TIME = "2026-08-06"     # 预留 horizon 尾部缓冲，避免末尾标签缺失
 HORIZON = 5                 # 未来 5 日收益
 FREQ = "day"
 
@@ -39,59 +65,84 @@ INSTRUMENTS = "all"
 
 # 内置示例因子（Qlib 表达式）
 FACTORS = {
-    "momentum_20": "Ref($close, 0) / Ref($close, 20) - 1",          # 20 日动量
-    "reversal_5": "Ref($close, 0) / Ref($close, 5) - 1",            # 5 日反转
-    "volatility_20": "Std($close, 20) / Mean($close, 20)",          # 20 日波动率
-    "volume_ratio_5": "Mean($volume, 5) / Mean($volume, 20)",       # 量比
-    "high_low_range": "($high - $low) / $close",                    # 日内振幅
+    "momentum_20": "$close / Ref($close, 20) - 1",          # 20 日动量
+    "reversal_5": "$close / Ref($close, 5) - 1",            # 5 日反转
+    "volatility_20": "Std($close, 20) / Mean($close, 20)",  # 20 日波动率
+    "volume_ratio_5": "Mean($volume, 5) / Mean($volume, 20)",  # 量比
+    "high_low_range": "($high - $low) / $close",            # 日内振幅
 }
 
 
-def build_label(horizon: int = HORIZON) -> pd.Series:
+def build_label(horizon: int = HORIZON) -> str:
     """构造未来 horizon 日收益作为 label（Qlib 表达式）。"""
-    return f"Ref($close, -{horizon}) / Ref($close, 0) - 1"
+    return f"Ref($close, -{horizon}) / $close - 1"
 
 
-def load_factor_data(factor_expr: str, label_expr: str) -> pd.DataFrame:
-    """加载单个因子的数据（因子值 + label），返回 MultiIndex (datetime, instrument)。"""
+def load_factor_data(factor_exprs: list[str], factor_names: list[str]) -> pd.DataFrame:
+    """一次性加载全部因子的数据（因子值 + label），返回 MultiIndex (datetime, instrument)。
+
+    行情读取截止到 END_TIME；由于 label 是未来 horizon 日收益，
+    末尾不足 horizon 天的样本会因 label 为 NaN 被 DropnaProcessor 丢弃。
+    """
+    label_expr = build_label()
     handler = DataHandlerLP(
         instruments=INSTRUMENTS,
         start_time=START_TIME,
         end_time=END_TIME,
         data_loader={
             "class": "QlibDataLoader",
-            "kwargs": {"config": {"feature": [factor_expr], "label": [label_expr]}},
+            "kwargs": {
+                # (exprs, names)：显式指定列名，返回单层索引 DataFrame
+                "config": (factor_exprs + [label_expr], factor_names + ["y_future"]),
+            },
         },
         infer_processors=[
             {"class": "DropnaProcessor"},
         ],
-        learn_processors=[],
     )
-    dataset = DatasetH(handler=handler, segments={"train": (START_TIME, END_TIME)})
-    df = dataset.prepare("train")
+    dataset = DatasetH(handler=handler, segments={"eval": (START_TIME, END_TIME)})
+    return dataset.prepare("eval")
+
+
+def winsorize_zscore(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """对指定列做截面缩尾 + 稳健标准化（Robust Z-Score）。
+
+    按每日截面分别计算 median / MAD，天然不跨时间、无未来函数：
+        1. 减去截面中位数
+        2. 除以 MAD * 1.4826，并截断到 [-3, 3]（去极值/缩尾）
+    返回处理后的副本。
+    """
+    df = df.copy()
+    for col in columns:
+        x = df[col]
+        med = x.groupby(level="datetime").transform("median")
+        mad = x.sub(med).abs().groupby(level="datetime").transform("median")
+        x_norm = (x - med) / (mad * 1.4826 + 1e-9)
+        df[col] = x_norm.clip(-3, 3)
     return df
 
 
-def evaluate_factor(name: str, factor_expr: str) -> pd.DataFrame:
+def evaluate_factor(df: pd.DataFrame, name: str) -> pd.Series:
     """计算单个因子的 IC / RankIC 序列，并汇总统计量。"""
-    label_expr = build_label()
-    df = load_factor_data(factor_expr, label_expr)
-
-    # 因子值 / label 取第一列
-    pred = df.iloc[:, 0]
-    label = df.iloc[:, 1]
+    pred = df[name]
+    label = df["y_future"]
 
     ic, ric = calc_ic(pred, label, dropna=True)
+    # calc_ic 返回逐日 IC 序列；若为空则统计量为 NaN
+    ic_mean = float(ic.mean()) if len(ic) else np.nan
+    ic_std = float(ic.std()) if len(ic) else np.nan
+    ric_mean = float(ric.mean()) if len(ric) else np.nan
+    ric_std = float(ric.std()) if len(ric) else np.nan
 
     summary = {
         "factor": name,
-        "IC_mean": ic.mean(),
-        "IC_std": ic.std(),
-        "ICIR": ic.mean() / ic.std() if ic.std() else np.nan,
-        "RankIC_mean": ric.mean(),
-        "RankIC_std": ric.std(),
-        "RankICIR": ric.mean() / ric.std() if ric.std() else np.nan,
-        "IC_positive_ratio": (ic > 0).mean(),
+        "IC_mean": ic_mean,
+        "IC_std": ic_std,
+        "ICIR": ic_mean / ic_std if (ic_std and not pd.isna(ic_std)) else np.nan,
+        "RankIC_mean": ric_mean,
+        "RankIC_std": ric_std,
+        "RankICIR": ric_mean / ric_std if (ric_std and not pd.isna(ric_std)) else np.nan,
+        "IC_positive_ratio": float((ic > 0).mean()) if len(ic) else np.nan,
         "n_days": len(ic),
     }
     return pd.Series(summary)
@@ -100,15 +151,31 @@ def evaluate_factor(name: str, factor_expr: str) -> pd.DataFrame:
 def main() -> None:
     qlib.init(provider_uri=QLIB_URI, region="cn")
 
-    print(f"股票池: {INSTRUMENTS} | 区间: {START_TIME} ~ {END_TIME} | 收益周期: {HORIZON} 日")
+    print(f"数据路径: {QLIB_URI}")
+    print(f"股票池: {INSTRUMENTS} | 评估区间: {START_TIME} ~ {END_TIME} | 收益周期: {HORIZON} 日")
     print("=" * 80)
 
+    factor_names = list(FACTORS.keys())
+    factor_exprs = [FACTORS[n] for n in factor_names]
+
     results = []
-    for name, expr in FACTORS.items():
-        print(f"\n>>> 评估因子: {name}")
-        print(f"    表达式: {expr}")
+    try:
+        df = load_factor_data(factor_exprs, factor_names)
+        print(f"加载完成，样本数: {len(df)}（含 {df.index.get_level_values(1).nunique()} 只股票）\n")
+
+        # 截面缩尾 + 稳健标准化（去极值），再进入 IC 评估
+        df = winsorize_zscore(df, factor_names)
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        print(f"[数据加载失败] {e}")
+        traceback.print_exc()
+        return
+
+    for name in factor_names:
+        print(f">>> 评估因子: {name}")
+        print(f"    表达式: {FACTORS[name]}")
         try:
-            row = evaluate_factor(name, expr)
+            row = evaluate_factor(df, name)
             results.append(row)
             print(f"    IC={row['IC_mean']:.4f}  ICIR={row['ICIR']:.4f}  "
                   f"RankIC={row['RankIC_mean']:.4f}  RankICIR={row['RankICIR']:.4f}")

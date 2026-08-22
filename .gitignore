@@ -9,9 +9,12 @@ venv/
 ENV/
 conda-env/
 
-# Qlib 数据（外部下载，不纳入版本控制）
-../qlib_data/
+# Qlib 数据与运行产物（外部下载 / 本地生成，不纳入版本控制）
+data/
 *.bin
+
+# mlflow 实验跟踪数据库
+mlflow.db
 
 # 日志
 logs/

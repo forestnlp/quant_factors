@@ -70,6 +70,11 @@ FACTORS = {
     "volatility_20": "Std($close, 20) / Mean($close, 20)",  # 20 日波动率
     "volume_ratio_5": "Mean($volume, 5) / Mean($volume, 20)",  # 量比
     "high_low_range": "($high - $low) / $close",            # 日内振幅
+    # —— TPD 类因子（用户公式，统一参数 EMA周期=7，与择时回测一致）——
+    #watch 公式1: TYP=(O+C+L+H)/4；TPD=EMA(C,7)-EMA(TYP,7)
+    "tpd_ohlc4": "EMA($close, 7) - EMA(($open + $close + $high + $low) / 4, 7)",
+    # 公式2: TYP=(O+C)/2；TPD=EMA(C,7)-EMA(TYP,7)
+    "tpd_oc2": "EMA($close, 7) - EMA(($open + $close) / 2, 7)",
 }
 
 

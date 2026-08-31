@@ -54,3 +54,21 @@ def bt_export_dir() -> Path:
     d = PROJECT_ROOT / "data" / "bt_export"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def llm_config() -> dict:
+    """返回本地 DeepSeek API 配置。
+
+    优先级：环境变量 > .env > 缺省。
+    键：
+        base_url   OpenAI 兼容接口地址（如 http://host:port/v1）
+        api_key    鉴权密钥
+        model      模型名
+    """
+    env = _parse_env_file(PROJECT_ROOT / ".env")
+    get = lambda key, default=None: os.getenv(key, env.get(key, default))  # noqa: E731
+    return {
+        "base_url": get("LLM_BASE_URL", "http://192.168.7.228:18082/v1"),
+        "api_key": get("LLM_API_KEY", ""),
+        "model": get("LLM_MODEL", "DeepSeek-V4-Flash"),
+    }

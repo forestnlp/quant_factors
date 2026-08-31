@@ -50,24 +50,37 @@
 - [ ] **参数稳健性测试**：测试不同持有周期（如 10 / 20 日）下因子是否依然稳定。
 
 ### 🟡 优先级中
+- [ ] **Agent 自动挖掘日线量价因子**：基于 `research/factor_eval.scan_factors` 作为评估引擎，构建候选因子生成器（遗传式 / 随机搜索因子空间），迭代打分、自动挖掘新因子。
 - [ ] **补充财务数据**：调研 tushare / akshare 等源为本地 qlib 数据补充财报字段，落地聚宽的「低成本强因子」（价值 / 现金流类，换手 1~2%）。
 - [ ] **行业 / 市值中性化**：引入中性化后重新评估因子 IC，剥离系统性效应。
 
 ### 🟢 优先级低
 - [ ] **多因子合成**：把第一梯队因子（放量反向 + 价值类）合成复合因子，提升 ICIR。
-- [ ] **接入 RD-Agent**：自动化因子挖掘与迭代。
+- [ ] **接入 RD-Agent**：自动化因子挖掘与迭代（若自研轻量 Agent 已够用可跳过）。
 - [ ] **接入 Backtrader**：把选股结果落到策略回测与绩效分析。
 
 ---
 
 ## 五、目录速览
 
+代码遵循「`playground/`(实验) → `research/`(提炼验证) → `src/`(正式)」递进路径。
+
 | 文件 | 作用 |
 |---|---|
-| `playground/init_qlib_data.py` | Qlib 数据初始化 / 更新 |
-| `playground/factor_ic_ir_pipeline.py` | 多因子 IC/IR 评估 |
+| `research/config.py` | .env / QLIB_URI 统一配置读取 |
+| `research/data_fetcher.py` | 数据采集层：qlib 全市场日线初始化 + 东财标的分钟/日线K |
+| `research/factor_eval.py` | 因子评估层：IC/RankIC/ICIR + 截面缩尾标准化 |
+| `research/strategies/tpd_redbar.py` | TPD「红柱放大」日内策略（扫描/成本/明细/绩效一条链） |
+| `research/strategies/tpd_cross.py` | TPD「上穿/下穿」日内策略（扫描/样本外验证） |
+| `research/tests/test_research.py` | research 冒烟测试 |
+| `playground/init_qlib_data.py` | Qlib 数据初始化 / 更新（原实验记录） |
+| `playground/factor_ic_ir_pipeline.py` | 多因子 IC/IR 评估（已提炼进 factor_eval） |
 | `playground/factor_scan.py` | 批量量价因子筛选 |
-| `playground/compare_tpd_factors.py` | TPD 两公式择时对比 |
+| `playground/compare_tpd_factors.py` | TPD 两公式择时对比（日线全市场） |
 | `playground/factor_portfolio_report.py` | 选股分层检验 + 组合回测报告 |
+| `playground/tpd_backtest_513310.py` | 日线 TPD 趋势回测（513310） |
+| `playground/intraday_orb_vwap.py` | ORB/VWAP 纯日内框架对比 |
+
+> 说明：已被 `research/` 取代的抓取脚本与重复的 TPD 变体已删除（fetch_513310*.py、probe_513310_min.py、tpd_macd_bar*.py、tpd_intraday*.py），历史见 git 提交。
 
 > 本文件为项目路线图，随开发进度持续更新。完成一项 Todo 后在对应复选框打勾。

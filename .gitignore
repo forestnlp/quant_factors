@@ -9,6 +9,9 @@ venv/
 ENV/
 conda-env/
 
+# 第三方工具与其虚拟环境（本地落盘、不入库；见 project-rules 第 8 条）
+.tools/
+
 # Qlib 数据与运行产物（外部下载 / 本地生成，不纳入版本控制）
 data/
 *.bin

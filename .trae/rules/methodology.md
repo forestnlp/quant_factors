@@ -20,113 +20,111 @@ description: 量化因子项目（quant_factors）的开发方法论，所有开
 
 > 总纲：先调研 → 抓主要矛盾 → 聚焦歼灭 → 动态闭环。与下方 1-4 条细则配合使用。
 
-## 1. Think Before Coding
+## 1. 先想清楚，再动手写代码
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
+**不臆测、不掩饰困惑、主动摆出取舍。**
 
-Before implementing:
+动手实现之前：
 
-- ✅ **State your assumptions explicitly**. If uncertain, ask.
-- ✅ **Present multiple interpretations**. Don't pick silently.
-- ✅ **Push back when warranted**. If a simpler approach exists, say so.
-- ✅ **Stop and ask**. If something is unclear, name what's confusing.
+- ✅ **把假设明确说出来**，不确定就问。
+- ✅ **有多种理解时全部列出**，不静默替用户做选择。
+- ✅ **该反驳就反驳**，如果有更简单的做法就讲出来。
+- ✅ **不懂就停下来问**，清楚说出哪里不懂。
 
-**Anti-patterns to avoid**:
+要避免的反面做法：
 
-- ❌ Making assumptions without checking
-- ❌ Hiding confusion and proceeding anyway
-- ❌ Picking one interpretation without surfacing alternatives
-- ❌ Continuing when confused instead of asking
+- ❌ 不做核查就自行假设
+- ❌ 心里困惑却闷头继续干
+- ❌ 有多种理解时静默选一种
+- ❌ 带着疑问继续推进而不提出
 
-## 2. Simplicity First
+## 2. 简单优先
 
-**Minimum code that solves the problem. Nothing speculative.**
+**只写解决问题所需的最少代码，不做任何投机性设计。**
 
-- ✅ Write only the code needed to solve the stated problem
-- ✅ No features beyond what was asked
-- ✅ No abstractions for single-use code
-- ✅ No "flexibility" or "configurability" that wasn't requested
-- ✅ No error handling for impossible scenarios
-- ✅ If you write 200 lines and it could be 50, rewrite it
+- ✅ 只写解决当前问题所必需的代码
+- ✅ 不做需求之外的功能
+- ✅ 不为只用一次的代码做抽象
+- ✅ 不添加没人要求的"灵活性"与"可配置性"
+- ✅ 不为不可能发生的场景写异常处理
+- ✅ 如果写了 200 行而其实 50 行够用，就重写
 
-**The senior engineer test**:
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+**资深工程师检验法**：问自己"资深工程师会不会说这搞复杂了"，如果会，就简化。
 
-**Anti-patterns to avoid**:
+要避免的反面做法：
 
-- ❌ Adding "nice-to-have" features not requested
-- ❌ Building abstractions for code that will only run once
-- ❌ Adding configuration options nobody asked for
-- ❌ Handling edge cases that can't happen in this context
-- ❌ Over-engineering simple problems
+- ❌ 添加没被要求的"锦上添花"功能
+- ❌ 为只跑一次的代码造抽象层
+- ❌ 添加没人要求的配置项
+- ❌ 处理在本场景下不可能发生的边界情况
+- ❌ 把简单问题过度设计
 
-## 3. Surgical Changes
+## 3. 精准改动
 
-**Touch only what you must. Clean up only your own mess.**
+**只碰必须碰的地方，只清理自己制造的杂乱。**
 
-When editing existing code:
+修改已有代码时：
 
-- ✅ **Touch only what's necessary**. Focus on the specific task.
-- ✅ **Don't "improve" adjacent code**. Leave comments, formatting alone.
-- ✅ **Don't refactor things that aren't broken**.
-- ✅ **Match existing style**. Even if you'd do it differently.
-- ✅ **Mention dead code**. If you notice unrelated dead code, mention it - don't delete it.
+- ✅ **只改必要的部分**，聚焦当前任务本身。
+- ✅ **不顺手"改进"周边代码**，注释与格式保持原样。
+- ✅ **不去重构没坏的代码**。
+- ✅ **沿用现有风格**，即使你个人偏好不同。
+- ✅ **发现死代码要说明**。看到与任务无关的死代码，提出来即可，不要动手删。
 
-When your changes create orphans:
+清理自己造成的遗留：
 
-- ✅ **Clean up YOUR mess**. Remove imports/variables/functions that YOUR changes made unused.
-- ❌ **Don't delete pre-existing dead code** unless explicitly asked.
+- ✅ **清理自己的烂摊子**。删除因你的改动而失效的导入、变量、函数。
+- ❌ **不删本来就存在的死代码**，除非被明确要求。
 
-**The test**: Every changed line should trace directly to the user's request.
+检验标准：每一行改动都能直接追溯到用户的需求。
 
-**Anti-patterns to avoid**:
+要避免的反面做法：
 
-- ❌ "While I'm here, let me also fix..." (scope creep)
-- ❌ Reformatting code you didn't write
-- ❌ Renaming things to match your preferences
-- ❌ Deleting dead code you noticed but didn't create
-- ❌ Changing comments you don't fully understand
+- ❌ "既然改到这里，顺手把那边也修一下"（范围蔓延）
+- ❌ 重新格式化自己没写过的代码
+- ❌ 按个人偏好重命名东西
+- ❌ 删掉自己发现但并非自己造成的死代码
+- ❌ 改自己都看不太懂的注释
 
-## 4. Goal-Driven Execution
+## 4. 以目标驱动执行
 
-**Define success criteria. Loop until verified.**
+**先定义成功标准，然后循环迭代直到验证通过。**
 
-Transform vague tasks into verifiable goals:
+把模糊任务转化为可验证目标：
 
-| Vague Task            | Verifiable Goal                                       |
-| --------------------- | ----------------------------------------------------- |
-| "Add validation"      | "Write tests for invalid inputs, then make them pass" |
-| "Fix the bug"         | "Write a test that reproduces it, then make it pass"  |
-| "Refactor X"          | "Ensure tests pass before and after"                  |
-| "Improve performance" | "Measure baseline, optimize, verify 2x improvement"   |
+| 模糊任务 | 可验证目标 |
+| -------- | ---------- |
+| "加点校验" | "为非法输入写测试，然后让测试通过" |
+| "修这个 bug" | "先写一个能复现 bug 的测试，再让它通过" |
+| "重构 X" | "重构前后测试都通过" |
+| "提升性能" | "先测基线，优化后验证提升达到 2 倍" |
 
-For multi-step tasks, state a brief plan:
+多步骤任务先给出简短计划：
 
 ```
-1. [Step 1] → verify: [how to check]
-2. [Step 2] → verify: [how to check]
-3. [Step 3] → verify: [how to check]
+1. [步骤一] → 验证：[怎么验]
+2. [步骤二] → 验证：[怎么验]
+3. [步骤三] → 验证：[怎么验]
 ```
 
-**Strong success criteria** let you loop independently.
-**Weak criteria** ("make it work") require constant clarification.
+**强的成功标准**能让人独立循环推进；**弱的成功标准**（"让它能跑"）会不断回来找人澄清。
 
-## How to Know These Guidelines Are Working
+## 如何判断这些准则正在起作用
 
-✅ **Good signs**:
+✅ **有效的迹象**：
 
-- Clarifying questions appear BEFORE implementation
-- PRs are smaller and more focused
-- AI stops "improving" things that were fine
-- Changes are surgical and traceable to requests
-- Fewer rewrites due to overcomplication
+- 动手之前先出现澄清性问题
+- 每次改动更小、更聚焦
+- 不再去"改进"本来没问题的东西
+- 改动精准且可追溯到需求
+- 因为过度设计导致的返工变少
 
-❌ **Bad signs**:
+❌ **失效的迹象**：
 
-- AI charges ahead without asking questions
-- Large diffs with unrelated changes
-- "While I'm here" scope creep
-- Over-engineered solutions for simple problems
-- Code style changes unrelated to the task
+- 不问清楚就闷头往前冲
+- 一次改动里混进大量无关变更
+- "既然改到这里"式的范围蔓延
+- 简单问题给出过度复杂的方案
+- 出现与任务无关的代码风格改动
 
-**Remember**: These guidelines are working if you see fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+**记住**：如果 diffs 里无关改动变少、因过度复杂而返工变少、澄清性问题出现在动手之前而不是犯错之后，就说明这些准则正在起作用。

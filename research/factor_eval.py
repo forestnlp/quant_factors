@@ -7,6 +7,8 @@
     2. winsorize_zscore — 按每日截面做缩尾 + 稳健标准化（无未来函数）
     3. evaluate_factor   — 单因子 IC/RankIC/ICIR 汇总
     4. scan_factors      — 批量评估并按 |RankICIR| 排序
+    5. add_industry_columns / industry_neutral — 申万行业维度：附加行业派生列、
+       按日×行业中位数去均值（剥离行业β，验因子真伪/增强信号）
 
 用法：
     from research.factor_eval import load_factor_data, winsorize_zscore, evaluate_factor, scan_factors
@@ -17,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from research.config import qlib_uri
+from research.config import industry_map_dir, qlib_uri
 
 HORIZON = 5          # 默认未来 horizon 日收益作为 label
 FREQ = "day"
@@ -141,3 +143,84 @@ def scan_factors(df: pd.DataFrame, factors: dict[str, str]) -> pd.DataFrame:
     res = pd.DataFrame(rows).set_index("factor")
     res["abs_RankICIR"] = res["RankICIR"].abs()
     return res.sort_values("abs_RankICIR", ascending=False).drop(columns=["abs_RankICIR"])
+
+
+def split_is_oos(df: pd.DataFrame, split: str = "2025-08-01",
+                 horizon: int = HORIZON) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """按时间轴切成样本内(IS)/样本外(OOS)两段，用于防过拟合筛选。
+
+    IS 段末尾留空 horizon 天，避免 IS 因子的 label 跨过切点用到 OOS 的收益。
+    只用时间切分，不重算任何统计量，因此两段各自仍是截面计算、无未来函数。
+    """
+    dt = df.index.get_level_values("datetime")
+    cut = pd.Timestamp(split)
+    is_end = cut - pd.tseries.offsets.BDay(horizon)
+    is_df = df[dt < is_end]
+    oos_df = df[dt >= cut]
+    return is_df, oos_df
+
+
+# ---------- 行业维度（申万一级，来源 data/industry_map/）----------
+
+def _stock_to_industry() -> dict:
+    """成分股快照 -> {qlib标的名(大写): 行业代码}。快照为准 PIT，仅用于中性化。"""
+    p = industry_map_dir() / "stock_industry_l1.csv"
+    if not p.exists():
+        raise FileNotFoundError(f"缺少行业映射 {p}，先运行: python research/data_fetcher.py industry")
+    m = pd.read_csv(p, dtype={"证券代码": str, "行业代码": str})
+    m["行业代码"] = m["行业代码"].str.zfill(6)
+
+    def to_qilib(c: str) -> str:
+        c = str(c).zfill(6)
+        if c[0] == "6":
+            return "SH" + c
+        if c[0] in "03":
+            return "SZ" + c
+        if c[0] in "489":
+            return "BJ" + c
+        return "SH" + c
+
+    return dict(zip(m["证券代码"].map(to_qilib), m["行业代码"]))
+
+
+def add_industry_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """为 load_factor_data 结果附加行业列（不破坏 MultiIndex）。
+
+    附加列：_ind（行业代码）及 ind_mom_20 / ind_amt_ratio / ind_vol_20
+    （行业 20 日动量、行业量能比 5/60、行业 20 日波动），
+    供构造"个股相对行业"类复合因子；未映射到行业的标的不删除。
+    """
+    inst = df.index.get_level_values("instrument")
+    s = pd.Series(inst, index=df.index).map(_stock_to_industry())
+    df = df.assign(_ind=s.values)
+
+    ind = pd.read_csv(industry_map_dir() / "sw_l1_index_daily.csv", dtype={"code": str})
+    ind["dt"] = pd.to_datetime(ind["日期"])
+    ind = ind.sort_values(["code", "dt"])
+    g = ind.groupby("code")
+    ind["ind_mom_20"] = g["收盘"].pct_change(20)
+    ind["ind_amt_ratio"] = g["成交额"].transform(
+        lambda x: x.rolling(5).mean() / x.rolling(60).mean())
+    ind["ind_vol_20"] = g["收盘"].pct_change().rolling(20).std()
+    key = ind[["dt", "code", "ind_mom_20", "ind_amt_ratio", "ind_vol_20"]]
+    key = key.rename(columns={"dt": "datetime", "code": "_ind"})
+
+    tmp = df[["_ind"]].reset_index().merge(key, on=["datetime", "_ind"], how="left")
+    tmp = tmp.set_index(["datetime", "instrument"])
+    for c in ["ind_mom_20", "ind_amt_ratio", "ind_vol_20"]:
+        df[c] = tmp[c].reindex(df.index)
+    return df
+
+
+def industry_neutral(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """按 日×行业 中位数去均值，剥离行业β（需先 add_industry_columns）。
+
+    与 winsorize_zscore 同理只用截面信息，无未来函数。返回副本。
+    """
+    if "_ind" not in df.columns:
+        raise ValueError("请先调用 add_industry_columns 附加 _ind 列")
+    df = df.copy()
+    for col in columns:
+        med = df.groupby(["datetime", "_ind"], observed=True)[col].transform("median")
+        df[col] = df[col] - med
+    return df

@@ -56,6 +56,13 @@ def bt_export_dir() -> Path:
     return d
 
 
+def industry_map_dir() -> Path:
+    """返回行业/概念映射数据目录 data/industry_map（自动创建）。"""
+    d = PROJECT_ROOT / "data" / "industry_map"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def llm_config() -> dict:
     """返回本地大模型 API 配置。
 

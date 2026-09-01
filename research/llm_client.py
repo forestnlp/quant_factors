@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""本地 DeepSeek 客户端（research 中间区）
+"""本地大模型客户端（research 中间区）
 
-封装 OpenAI 兼容的 chat/completions 调用，指向 .env 中配置的本地 DeepSeek API，
+封装 OpenAI 兼容的 chat/completions 调用，指向 .env 中配置的本地大模型 API，
 供因子挖掘 Agent 使用。不依赖具体业务逻辑，只负责「发请求 → 取文本」。
 
-注意：DeepSeek-V4-Flash 为推理模型，响应含 reasoning_content（思考过程），
+注意：当前模型 Qwen3.8-Flash 为推理模型，响应含 reasoning_content（思考过程），
 max_tokens 仅计生成部分，需预留充足空间；本客户端默认自动剥离 reasoning。
 
 用法：
@@ -19,7 +19,7 @@ from research.config import llm_config
 
 
 class LLMClient:
-    """本地 DeepSeek 的轻量 OpenAI 兼容客户端。"""
+    """本地大模型的轻量 OpenAI 兼容客户端。"""
 
     def __init__(self, config: dict | None = None):
         self.cfg = config or llm_config()

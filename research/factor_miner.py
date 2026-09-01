@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
-"""本地 DeepSeek 驱动——单轮因子挖掘最小闭环（research 中间区）
+"""本地大模型驱动——单轮因子挖掘最小闭环（research 中间区）
 
-对应项目目标 Phase1「原型打通」：跑通「Prompt → DeepSeek 生成因子代码 →
+对应项目目标 Phase1「原型打通」：跑通「Prompt → LLM 生成因子代码 →
 Qlib IC/IR 评估 → 输出结果」的最小链路，验证可行性，暂不做循环迭代。
 
 流程（本轮）：
     1. 构造结构化 Prompt（约束输出 JSON，注入字段规范 + 示例 + 历史避坑）
-    2. 调本地 DeepSeek（llm_client），得到候选因子 {name, expr, logic}
+    2. 调本地大模型（llm_client），得到候选因子 {name, expr, logic}
     3. 用 research.factor_eval 加载数据并评估 IC / RankIC / ICIR
     4. 表达式非法或评估失败时，把错误喂回模型重试一次
 
 用法：
-    conda run -n jaycode python research/factor_miner.py mine        # 真实调用 DeepSeek
+    conda run -n jaycode python research/factor_miner.py mine        # 真实调用本地大模型
     conda run -n jaycode python research/factor_miner.py smoke       # 不调 LLM，仅验评估链
 """
 
@@ -63,10 +63,10 @@ SYSTEM_PROMPT = f"""你是一名资深量化因子研究员，为 A 股全市场
 def build_user_prompt() -> str:
     """构造本轮挖掘任务指令（可扩展注入历史成败案例上下文）。"""
     return (
-        "请基于 A 股近三年震荡市环境，提出 3 个全新的、有独立逻辑的量价日线因子。"
+        "请基于 A 股近三年震荡市环境，提出 1 个全新的、有独立逻辑的量价日线因子。"
         "注意：当前市场有效信号偏『负向』（放量/高波动后收益偏低），"
-        "优先探索成交量结构、量价背离、波动率聚簇、开盘/收盘相对位置等维度。"
-        "每个因子都要给出唯一名字、合法 Qlib 表达式、以及一句话逻辑假设。"
+        "可探索成交量结构、量价背离、波动率聚簇、开盘/收盘相对位置等维度。"
+        "给出唯一名字、合法 Qlib 表达式、一句话逻辑假设，直接输出 JSON。"
     )
 
 
@@ -87,7 +87,7 @@ def parse_factor_json(text: str) -> dict:
 
 
 def generate_factor(client: LLMClient, user_prompt: str) -> dict:
-    """调用一次 DeepSeek，仅生成候选因子定义 {name, expr, logic}，不回测。
+    """调用一次本地大模型，仅生成候选因子定义 {name, expr, logic}，不回测。
 
     失败时带错误喂回模型重试一次。
     """
@@ -96,7 +96,7 @@ def generate_factor(client: LLMClient, user_prompt: str) -> dict:
         {"role": "user", "content": user_prompt},
     ]
     for attempt in (1, 2):
-        text = client.chat(messages, temperature=0.4, max_tokens=4096)
+        text = client.chat(messages, temperature=0.4, max_tokens=16384)
         try:
             return parse_factor_json(text)
         except Exception as e:  # noqa: BLE001
@@ -186,7 +186,7 @@ def main() -> None:
         print("\nsmoke 通过。")
         return
 
-    print("=== mine：本地 DeepSeek 单轮因子挖掘 ===")
+    print("=== mine：本地大模型单轮因子挖掘 ===")
     client = LLMClient()
     results = mine(client, n_factors=args.num)
 

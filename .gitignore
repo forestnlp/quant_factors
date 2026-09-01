@@ -13,9 +13,6 @@ conda-env/
 data/
 *.bin
 
-# mlflow 实验跟踪数据库
-mlflow.db
-
 # 日志
 logs/
 *.log
@@ -47,11 +44,3 @@ results/
 *.pkl
 *.joblib
 *.h5
-
-# 学习/实验区产物（playground 目录本身纳入版本控制，仅忽略其运行产物）
-playground/**/__pycache__/
-playground/**/*.pkl
-playground/**/*.joblib
-playground/**/*.h5
-playground/**/results/
-playground/**/logs/

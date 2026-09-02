@@ -71,6 +71,28 @@ def check_auth() -> bool:
     return True
 
 
+def _acquire_channel_lock(stage: Path):
+    """云端通道独占锁：同一时刻只允许一个取数进程（实测并发会撞云端临时内核，
+    表现为 download 报 not_found）。返回锁文件句柄；被占用抛 RuntimeError。"""
+    import os
+    lock = stage / ".channel.lock"
+    for _ in range(2):
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            return fd
+        except FileExistsError:
+            try:  # 陈旧锁（持有进程已死）则清掉重试一次
+                pid = int(lock.read_text().strip() or "0")
+                if Path(f"/proc/{pid}").exists():
+                    break
+                lock.unlink(missing_ok=True)
+            except (ValueError, OSError):
+                lock.unlink(missing_ok=True)
+    raise RuntimeError(
+        f"聚宽通道被进程 {lock.read_text() if lock.exists() else '?'} 占用，禁止并发取数")
+
+
 def run_script(script: str, remote_name: str, local_out: Path,
                timeout: int = 900, exec_timeout: float = 600.0) -> Path:
     """云端执行取数脚本，把产出 csv 拉到 local_out；无论成败都清理云端与本地脚本。
@@ -81,12 +103,19 @@ def run_script(script: str, remote_name: str, local_out: Path,
     """
     stage = PROJECT_ROOT / "data" / "_stage"
     stage.mkdir(parents=True, exist_ok=True)
+    fd = _acquire_channel_lock(stage)
     local_script = stage / f"_{remote_name}.py"
     local_script.write_text(script, encoding="utf-8")
     try:
-        _jqcli("research", "exec", "--file", str(local_script),
-               "--execution-timeout", str(exec_timeout), "--yes",
-               timeout=timeout)
+        resp = _jqcli("research", "exec", "--file", str(local_script),
+                      "--execution-timeout", str(exec_timeout), "--yes",
+                      timeout=timeout)
+        # 云端执行报错时 jqcli 仍返回 0，若不检查就 download 只会得到
+        # not_found（下游症状），真因被吞——必须把 exec 错误原样抛出
+        if resp.get("status") == "error":
+            o = (resp.get("outputs") or [{}])[0]
+            raise RuntimeError(
+                f"云端执行失败: {o.get('ename')}: {str(o.get('evalue'))[:300]}")
         _jqcli("research", "download", f"{CLOUD_OUT_DIR}/{remote_name}",
                "-o", str(local_out), "--force", timeout=300)
     finally:
@@ -96,6 +125,9 @@ def run_script(script: str, remote_name: str, local_out: Path,
         except Exception:  # noqa: BLE001 - 清理失败不影响取数结果
             pass
         local_script.unlink(missing_ok=True)
+        import os
+        os.close(fd)
+        (stage / ".channel.lock").unlink(missing_ok=True)
     if not local_out.exists() or local_out.stat().st_size < 100:
         raise RuntimeError(f"云端未产出有效文件: {remote_name}")
     return local_out

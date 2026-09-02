@@ -122,7 +122,7 @@ def build_features() -> pd.DataFrame:
                 how="left")
     d["st_flag"] = d["st_flag"].fillna(0.0)
 
-    keep = ["date", "code", "close", "paused", "high_limit", "low_limit",
+    keep = ["date", "code", "close", "post_close", "paused", "high_limit", "low_limit",
             "st_flag",
             "r_1", "r_5d", "r_10d", "r_20d", "r_60d",
             "v_std_20", "v_amt_5_20", "v_vwap_dev", "v_close_loc",

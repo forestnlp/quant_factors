@@ -114,9 +114,10 @@ L4 挖掘层    LLM 假设器（白名单 pandas 表达式）← 失败案例回
 |---|---|
 | `config.py` | 路径统一读取：`raw_dir()` / `derived_dir()` / `jqcli_bin()` |
 | `jq_channel.py` | 聚宽云端通道：jqcli 三段式（exec→download→rm）、分片、认证 fail-fast、交易日历 |
-| `fetch.py` | 取数任务：`calendar` / `probe` / `daily` / `auction` / `valuation` / `money_flow` / `industry` / `concept` / `finance`，断点续跑 + 落盘覆盖核对 |
-| `build.py` | **L2 特征层**：raw → `derived/features.parquet`（15 数值特征 + `fwd_ret_5` 标签，停牌 NaN 不填充）+ `industry/concept/finance.parquet` 维表；幂等可重建 |
-| `check.py` | **数据体检门**：完整性/日历对齐/跨数据集主键与语义校验 + 交易规则对抗审计（涨跌停交易所口径、价格带、额量价、资金流守恒）；每次增量取数后必跑 |
+| `fetch.py` | 取数任务：`calendar` / `probe` / `daily` / `auction` / `valuation` / `money_flow` / `industry` / `concept` / `finance` / `mtss` / `billboard` / `st`，断点续跑 + 落盘覆盖核对 |
+| `build.py` | **L2 特征层**：raw → `derived/features.parquet`（26 列：动量/量能/估值/资金流/竞价失衡/两融占比/龙虎榜/ST + `fwd_ret_5` 标签；停牌与估值 NaN 不填充；两融 T+1 滞后、龙虎榜次日生效）+ `industry/concept/finance.parquet` 维表；幂等可重建 |
+| `check.py` | **数据体检门**：完整性/日历对齐/跨数据集主键与语义校验 + 交易规则对抗审计（时变涨跌停交易所口径、价格带、额量价、资金流守恒）+ 增强件 join 率与自洽校验；每次增量取数后必跑 |
+| `eval.py` | **L3 评估裁判**：截面 IC/RankIC/ICIR/正率 + 五分层多空价差 + 行业中性（日×行业中位去均值）+ IS/OOS 双段（2024-01-01 切）；内建可交易性过滤（剔停牌/ST/涨停触板）与截面厚度门 |
 
 评估（`factor_eval`）、因子库（`factor_lib`）、挖掘（`factor_miner`）、LLM 客户端（`llm_client`）等模块属于后续阶段，已在 git `42fc087` 保留，待特征底座成型后按需重写，不提前搬回。
 
@@ -151,12 +152,14 @@ conda run -n jaycode python -m research.check                                   
 - ✅ **分钟/tick 定位结论**：tick 历史聚宽本就没有（仅近期快照），永久搁置；分钟 K 历史有限且原始全量入库（~200GB/几十小时在线）与通道形态不匹配——**正确用法是将来"云端聚合、只取日频统计结果"**（尾盘动量/日内波动结构/量分布等），列为 L3 撞 IC 天花板后的预备役
 
 **下一步（按序歼灭）**
-1. **L3 评估层**：装 vectorbt，IC/RankIC/ICIR + 分层回测 + IS/OOS，跑通首批基线因子（动量/量能/估值/资金流各一）→ 验证：已知强信号（如放量负向）能被复现
+1. 组合级回测（装 vectorbt，TopkDropout + 费率换手 + 净值曲线）——L3 第二仗，IC 之外看真钱
 2. 估值/资金流 **end 取 T-1** 的增量更新演练一次（定期更新机制实弹验证）
-3. 竞价取数、2005~2024 历史补齐、行业/概念历史快照补齐（重跑命令即可，择机）
-4. L4 挖掘层（LLM 假设器 + 因子库记忆）待 L3 稳定后开
+3. L4 挖掘层（LLM 假设器 + 因子库记忆回喂）——裁判已可信，可开
+4. 择机：2005~2019 历史补齐、`securities.csv` 落盘、`signals/` 生产层实装
 
 ## 已确立的研究结论
+
+0. **L3 基线开考（2026-09-02，2020~2026 全区间、可交易样本 732 万行，标签 fwd_ret_5）**——管线验收通过：教科书异象在 A 股全部复现且 OOS 不衰减：反转 `r_20d`（OOS RankIC -0.065）、**放量负向 `v_amt_5_20`**（OOS -0.045，ICIR 中性后 -0.52，用户核心信念第三次复现）、低波动 `v_std_20`（-0.078）、低换手 `vlm_turnover`（-0.075，多空价差 -45bp/5日）、小市值 `vlm_ln_mv`（-0.035）。**新发现**：竞价额占全日比 `auc_money_share` 负向且中性化后 ICIR -0.71（竞价维度的第一个信号）；龙虎榜次日 `bb_yest` 显著负（RankIC -0.045）；主力资金流 `mf_net_pct_main` 五日 IC 很弱（-0.01）——"跟主力"在周频尺度不成立。**证伪警示**：`v_corr_pv_20` 在 2023~2026 旧窗口 RankICIR +0.82，放到 2020~2026 全区间翻负（-0.55）——**因子方向随市场窗口翻转，这就是必须全历史 + IS/OOS 的铁证**，任何只在近三年验证过的结论都不可信。
 
 1. **量能 > 价格**：放量类是最强量价方向且为**负向**（放量→未来收益低），近 3 年震荡市成立（多轮交叉印证）。
 2. **行业是分层不是信号层**：行业自身动量弱（RankICIR 0.1~0.2）；个股因子做行业相对化/中性化后信号更纯净（0.50→0.58）。

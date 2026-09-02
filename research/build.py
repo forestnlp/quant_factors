@@ -80,12 +80,57 @@ def build_features() -> pd.DataFrame:
     d = d.merge(mf[["date", "code", "mf_net_pct_main", "mf_net_pct_l"]],
                 on=["date", "code"], how="left")
 
-    keep = ["date", "code", "paused", "high_limit", "low_limit",
+    # 竞价（9:25 即知，当日可用）：额、相对买卖失衡、额占全日比须 build 端算
+    au = _load_raw("auction").drop_duplicates(subset=["day", "code"])
+    au = au.rename(columns={"day": "date", "current": "auc_price",
+                            "money": "auc_money", "b1_v": "auc_b1",
+                            "a1_v": "auc_a1"})
+    d = d.merge(au[["date", "code", "auc_money", "auc_b1", "auc_a1"]],
+                on=["date", "code"], how="left")
+    imb_den = (d["auc_b1"] + d["auc_a1"]).replace(0, np.nan)
+    d["auc_imb"] = (d["auc_b1"] - d["auc_a1"]) / imb_den      # 竞价买卖失衡
+    d["auc_money_share"] = d["auc_money"] / d["money"]         # 竞价额占全日比
+
+    # 两融（T+1 晨间才公布 T 日余额 → 一律滞后一日使用，防未来函数）
+    mt = _load_raw("mtss").drop_duplicates(subset=["date", "sec_code"])
+    mt = mt.rename(columns={"sec_code": "code",
+                            "fin_value": "mt_fin_value",
+                            "sec_value": "mt_sec_value"})
+    mt["mt_date"] = pd.to_datetime(mt["date"]) + pd.Timedelta(days=1)
+    d["date_dt"] = pd.to_datetime(d["date"])
+    d = pd.merge_asof(
+        d.sort_values("date_dt").reset_index(drop=True),
+        mt[["code", "mt_date", "mt_fin_value", "mt_sec_value"]]
+        .sort_values("mt_date"),
+        left_on="date_dt", right_on="mt_date", by="code",
+        direction="backward", tolerance=pd.Timedelta(days=7))
+    # 融资余额/总市值（市值单位亿元→元）；非两融标的为 NaN 属正常
+    d["mt_fin_ratio"] = d["mt_fin_value"] / (d["market_cap"] * 1e8)
+
+    # 龙虎榜（T 日盘后公布 → 仅 T+1 单日可用）：等值 join 生效日即可
+    bb = _load_raw("billboard")[["day", "code"]].drop_duplicates()
+    bb["bb_date"] = pd.to_datetime(bb["day"]) + pd.Timedelta(days=1)
+    bb["bb_yest"] = 1.0
+    d = d.merge(bb[["bb_date", "code", "bb_yest"]].rename(
+        columns={"bb_date": "date_dt"}), on=["date_dt", "code"], how="left")
+    d["bb_yest"] = d["bb_yest"].fillna(0.0)
+
+    # ST（盘前已知，当日可用）
+    st = _load_raw("st")[["day", "code"]].drop_duplicates()
+    st["st_flag"] = 1.0
+    d = d.merge(st.rename(columns={"day": "date"}), on=["date", "code"],
+                how="left")
+    d["st_flag"] = d["st_flag"].fillna(0.0)
+
+    keep = ["date", "code", "close", "paused", "high_limit", "low_limit",
+            "st_flag",
             "r_1", "r_5d", "r_10d", "r_20d", "r_60d",
             "v_std_20", "v_amt_5_20", "v_vwap_dev", "v_close_loc",
             "v_corr_pv_20",
             "pe_ratio", "pb_ratio", "vlm_ln_mv", "vlm_ln_circ", "vlm_turnover",
-            "mf_net_pct_main", "mf_net_pct_l", "fwd_ret_5"]
+            "mf_net_pct_main", "mf_net_pct_l",
+            "auc_imb", "auc_money_share", "mt_fin_ratio", "bb_yest",
+            "fwd_ret_5"]
     feat = d[keep].copy()
     feat.to_parquet(derived_dir() / "features.parquet", index=False)
     return feat

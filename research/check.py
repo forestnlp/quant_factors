@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 
 from research.config import raw_dir
 
@@ -226,6 +227,59 @@ def deep_rules() -> None:
         print(f"行业快照({snap}) vs 日线标的: 交集 {len(ii & di)},"
               f" 行业独有 {len(ii - di)}(退市/停牌当日不在日线, 正常),"
               f" 日线独有 {len(di - ii)}(快照日之后上市)")
+
+
+def new_sets() -> None:
+    """八、增强件质量体检：竞价/两融/龙虎榜/ST（join 率 + 内部语义）。"""
+    daily = _load("daily", ["time", "code", "open", "close", "paused", "volume"])
+    dcol = _col_date(daily)
+    key = daily[[dcol, "code"]].rename(columns={dcol: "d"})
+
+    print("\n八、增强件质量体检")
+    au = _load("auction", ["code", "time", "current", "volume", "money", "day"])
+    au = au.drop_duplicates(subset=["day", "code"])
+    m = key.merge(au.rename(columns={"day": "d"})[["d", "code", "money"]],
+                  on=["d", "code"], how="left")
+    print(f"竞价: {len(au)} 行, 与日线 join 率 {m['money'].notna().mean():.4f}"
+          + (" ✓" if m["money"].notna().mean() > 0.95 else " ！"))
+    # 语义：竞价均价=current（9:25 撮合价），必须落在 [0, 当日合理带]；
+    # 且竞价成交额/成交量 ≈ current（±3%，含手续费舍入）
+    r = (au["money"] / au["volume"].replace(0, np.nan)) / au["current"].replace(0, np.nan)
+    bad = int(((r - 1).abs() > 0.03).sum())
+    print(f"竞价均价自洽(money/vol≈current ±3%)违例: {bad}"
+          + (" ✓" if bad < len(au) * 0.01 else " ！"))
+
+    mt = _load("mtss", ["date", "sec_code", "fin_value", "sec_value"])
+    mt = mt.drop_duplicates(subset=["date", "sec_code"])
+    m = key.merge(mt.rename(columns={"date": "d", "sec_code": "code"}),
+                  on=["d", "code"], how="left")
+    print(f"两融: {len(mt)} 行, join 率 {m['fin_value'].notna().mean():.4f}"
+          "（两融标的池本就 ~40%，低于 1 属正常）")
+    neg = int((mt[["fin_value", "sec_value"]] < 0).sum().sum())
+    print(f"两融余额<0 违例: {neg}" + (" ✓" if neg == 0 else " ！"))
+
+    bb = _load("billboard", ["code", "day", "buy_value", "sell_value",
+                             "net_value", "amount"])
+    bb = bb.drop_duplicates()
+    resid = (bb["buy_value"] - bb["sell_value"] - bb["net_value"]).abs()
+    bad = int((resid > (bb["amount"].abs().clip(lower=1e4) * 0.01)).sum())
+    print(f"龙虎榜: {len(bb)} 行(去重), 净额自洽(buy-sell=net ±1%)违例: {bad}"
+          + (" ✓" if bad < len(bb) * 0.02 else " ！"))
+    m = key.merge(bb.groupby(["day", "code"]).size().rename("n")
+                  .reset_index().rename(columns={"day": "d"}),
+                  on=["d", "code"], how="left")
+    print(f"龙虎榜 join 率 {m['n'].notna().mean():.4f}（事件型 <5% 正常）")
+
+    st = _load("st", ["day", "code"])
+    st = st.drop_duplicates()
+    m = key.merge(st.assign(is_st=1).rename(columns={"day": "d"}),
+                  on=["d", "code"], how="left")
+    rate = m["is_st"].notna().mean()
+    print(f"ST: {len(st)} 行, join 率 {rate:.4f}（ST 占比 ~2% 量级正常）")
+    # 语义：ST 股当日不应涨停买入受限——仅统计不判定（信息项）
+    both = m[m["is_st"] == 1].merge(
+        daily.rename(columns={dcol: "d"}), on=["d", "code"])
+    print(f"ST 行在日线中可寻率: {len(both) / max(rate * len(m), 1):.3f}（信息项）")
 
 
 if __name__ == "__main__":

@@ -221,6 +221,68 @@ print("rows=%d codes=%d periods=%d size=%.1fMB" % (
     os.path.getsize(p) / 1048576.0))
 '''
 
+MTSS_TMPL = '''# -*- coding: utf-8 -*-
+# 融资融券（两融标的约 4000 只/日，直接按日分片全市场）
+from jqdata import *
+import os
+import pandas as pd
+
+DAYS = {days!r}
+os.makedirs("jq_out", exist_ok=True)
+parts = []
+for d in DAYS:
+    codes = get_all_securities("stock", date=d).index.tolist()
+    for i in range(0, len(codes), 1500):
+        parts.append(get_mtss(codes[i:i + 1500], start_date=d, end_date=d))
+df = pd.concat([p for p in parts if p is not None and len(p)], ignore_index=True)
+df["date"] = df["date"].astype(str).str[:10]
+p = os.path.join("jq_out", "{fname}")
+df.to_csv(p, index=False)
+print("rows=%d codes=%d days=%d size=%.1fMB" % (
+    len(df), df["sec_code"].nunique(), df["date"].nunique(),
+    os.path.getsize(p) / 1048576.0))
+'''
+
+BILLBOARD_TMPL = '''# -*- coding: utf-8 -*-
+# 龙虎榜：stock_list=None 时官方仅支持 end_date+count 单日口径，逐日取
+from jqdata import *
+import os
+import pandas as pd
+
+DAYS = {days!r}
+os.makedirs("jq_out", exist_ok=True)
+parts = []
+for d in DAYS:
+    parts.append(get_billboard_list(stock_list=None, end_date=d, count=1))
+df = pd.concat([p for p in parts if p is not None and len(p)], ignore_index=True)
+df["day"] = df["day"].astype(str).str[:10]
+p = os.path.join("jq_out", "{fname}")
+df.to_csv(p, index=False)
+print("rows=%d codes=%d days=%d size=%.1fMB" % (
+    len(df), df["code"].nunique(), df["day"].nunique(),
+    os.path.getsize(p) / 1048576.0))
+'''
+
+ST_TMPL = '''# -*- coding: utf-8 -*-
+# ST 标记：get_extras 矩阵（index=日, columns=股票），落长表只存 True（省 99% 体积）
+from jqdata import *
+import os
+import pandas as pd
+
+DAYS = {days!r}
+os.makedirs("jq_out", exist_ok=True)
+m = get_extras("is_st", get_all_securities("stock", date=DAYS[-1]).index.tolist(),
+               start_date=DAYS[0], end_date=DAYS[-1], df=True)
+s = m.stack()
+s = s[s == 1].rename_axis(["day", "code"]).rename("is_st").reset_index()
+s["day"] = s["day"].astype(str).str[:10]
+p = os.path.join("jq_out", "{fname}")
+s.to_csv(p, index=False)
+print("rows(ST日数)=%d codes=%d days=%d size=%.1fMB" % (
+    len(s), s["code"].nunique(), s["day"].nunique(),
+    os.path.getsize(p) / 1048576.0))
+'''
+
 PROBE_TMPL = '''# -*- coding: utf-8 -*-
 from jqdata import *
 import os, time
@@ -430,11 +492,33 @@ def fetch_finance(start_year: int, end_year: int, force: bool = False) -> None:
     print(f"[finance] 覆盖核对: {len(files)} 个报告期, {total} 行")
 
 
+def fetch_mtss(start: str, end: str, chunk_days: int = 30,
+               force: bool = False) -> None:
+    """融资融券 → data/raw/jq/mtss/"""
+    _fetch_series("mtss", MTSS_TMPL, start, end, chunk_days,
+                  raw_dir("jq", "mtss"), force)
+
+
+def fetch_billboard(start: str, end: str, chunk_days: int = 60,
+                    force: bool = False) -> None:
+    """龙虎榜 → data/raw/jq/billboard/"""
+    _fetch_series("billboard", BILLBOARD_TMPL, start, end, chunk_days,
+                  raw_dir("jq", "billboard"), force)
+
+
+def fetch_st(start: str, end: str, chunk_days: int = 250,
+             force: bool = False) -> None:
+    """ST 标记（长表只存 True）→ data/raw/jq/st/"""
+    _fetch_series("st", ST_TMPL, start, end, chunk_days,
+                  raw_dir("jq", "st"), force)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="聚宽取数任务")
     ap.add_argument("task", choices=["calendar", "probe", "daily", "auction",
                                      "valuation", "money_flow", "industry",
-                                     "concept", "finance"])
+                                     "concept", "finance", "mtss", "billboard",
+                                     "st"])
     ap.add_argument("--start", default="2025-01-04",
                     help="起始日期（industry/concept/finance 任务传年份如 2025）；"
                          "聚宽行情起点为 2005-01-04（官方文档+实测）")
@@ -460,6 +544,12 @@ def main() -> None:
         fetch_concept(int(a.start[:4]), int(a.end[:4]), a.force)
     elif a.task == "finance":
         fetch_finance(int(a.start[:4]), int(a.end[:4]), a.force)
+    elif a.task == "mtss":
+        fetch_mtss(a.start, a.end, a.chunk_days or 30, a.force)
+    elif a.task == "billboard":
+        fetch_billboard(a.start, a.end, a.chunk_days or 60, a.force)
+    elif a.task == "st":
+        fetch_st(a.start, a.end, a.chunk_days or 250, a.force)
     else:
         fetch_auction(a.start, a.end, a.chunk_days or 10, a.force)
 

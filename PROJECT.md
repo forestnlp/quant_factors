@@ -63,14 +63,16 @@ L4 挖掘层    LLM 假设器（白名单 pandas 表达式）← 失败案例回
 |---|---|---|---|---|
 | 一次性 | 交易日历 | trade_days | `raw/jq/trading_calendar.csv` | ✅ 5263 天已落盘 |
 | 一次性 | 标的清单 | code, start/end_date, 名称 | `raw/jq/securities.csv` | 待取（daily 云端在用，但未落盘） |
-| 日度 | 日线 | 真实价 OHLCV+money、`high_limit`/`low_limit`/`paused` + 后复权 OHLC | `raw/jq/daily/` | ✅ 2025-01~2026-09（8 片 209.6 万行）；2005~2024 待补 |
-| 日度 | 估值 | pe/pb/market_cap/circulating_market_cap | `raw/jq/valuation/` | ✅ 2025-01~2026-09（27 片 208.3 万行，与日线 join 99.1%） |
-| 日度 | 资金流 | net_amount_main / net_pct_l 等 12 列 | `raw/jq/money_flow/` | ✅ 2025-01~2026-09（8 片 211.4 万行） |
-| 日度 | 集合竞价 | 撮合价、竞价额、买卖一档量 | `raw/jq/auction/` | 待取（2010 起） |
-| 低频 | 两融/龙虎榜/ST | get_mtss / get_billboard_list / get_extras | `raw/jq/…` | 能力已实测，待入库 |
-| 季度 | 概念成分 PIT | get_concept_stocks(399 概念) | `raw/jq/concept/` | ✅ 2025~2026（8 快照 34.9 万行；**成分确随时变**：半导体 2025-01=99 只 vs 2026-08=159 只） |
-| 季度 | 行业 PIT | sw_l1/l2、jq_l1、zjw 代码+名称（季度末快照） | `raw/jq/industry/` | ✅ 2025~2026（8 快照 3.6 万行）；历史待补 |
-| 事件 | 财务公告 | pub_date / report_date / end_date + 营收/净利/成本/EPS | `raw/jq/finance/` | ✅ 2024Q1~2026Q2（10 报告期 8.3 万行；含 report_type 预告；`run_query` 无 statDate，用 filter(end_date=)） |
+| 日度 | 日线 | 真实价 OHLCV+money、`high_limit`/`low_limit`/`paused` + 后复权 OHLC | `raw/jq/daily/` | ✅ **2020-01~2026-09（29 片 774.7 万行）**；2005~2019 待补 |
+| 日度 | 估值 | pe/pb/market_cap/circulating_market_cap | `raw/jq/valuation/` | ✅ 2020~2026（109 片 770.5 万行） |
+| 日度 | 资金流 | net_amount_main / net_pct_l 等 12 列 | `raw/jq/money_flow/` | ✅ 2020~2026（29 片 767.4 万行） |
+| 日度 | 集合竞价 | 撮合价、竞价额、买卖一档量 | `raw/jq/auction/` | ✅ 2020~2026（162 片 768.2 万行） |
+| 日度 | 两融 | fin_value/sec_value/买入额 9 列 | `raw/jq/mtss/` | ✅ 2020~2026（54 片 450.9 万行） |
+| 事件 | 龙虎榜 | 席位买卖明细 | `raw/jq/billboard/` | ✅ 2020~2026（27 片 124.8 万行） |
+| 日度 | ST 标记 | is_st 长表（只存 True） | `raw/jq/st/` | ✅ 2020~2026（25.4 万行） |
+| 季度 | 概念成分 PIT | get_concept_stocks(399 概念) | `raw/jq/concept/` | ✅ 2020~2026（28 快照 92.7 万行；**成分确随时变**：半导体 2025-01=99 只 vs 2026-08=159 只） |
+| 季度 | 行业 PIT | sw_l1/l2、jq_l1、zjw 代码+名称（季度末快照） | `raw/jq/industry/` | ✅ 2020~2026（28 快照 13 万行） |
+| 事件 | 财务公告 | pub_date / report_date / end_date + 营收/净利/成本/EPS | `raw/jq/finance/` | ✅ 2020Q1~2026Q2（26 报告期 24.1 万行；含 report_type 预告；`run_query` 无 statDate，用 filter(end_date=)） |
 
 **取数实测边界（写码必守）**：`get_valuation` 单次约 **1 万行上限**（静默截断！须逐日查询）；`get_money_flow` 无此限；**估值数据 T 日盘前不可得**（T 当天行全 NaN，T+1 生成）→ 增量更新的 end 应取 T-1，L2 对 NaN 行做 drop。
 
@@ -144,6 +146,9 @@ conda run -n jaycode python -m research.check                                   
 - ✅ 项目聚焦重构：只留取数引擎 + `docs/jq/`；旧数据/旧因子代码全部下线（git `42fc087` 可查）
 - ✅ **多维取齐 2025~今**：估值（208 万行，修复 1 万行静默截断）、资金流（208 万行）、行业 PIT、概念 PIT（34.9 万行）、财务公告含 pub_date（8.3 万行）——全部过 `check.py` 体检门（含交易规则对抗审计：涨跌停交易所口径、价格带、额量价、资金流守恒，全绿）
 - ✅ **L2 特征层建成**：`build.py` → `features.parquet` 209.6 万行 × 15 特征 + `fwd_ret_5` 标签；可用样本 196 万；茅台手工复算与宽表分毫不差
+- ✅ **数据大扩张完成（2026-09-02）**：全部 10 个数据集补齐至 **2020-01~2026-09（6.7 年）**，raw 层共 **~4300 万行 / 约 4G**（日线 775 万、估值 771 万、资金流 767 万、竞价 768 万、两融 451 万、龙虎榜 125 万、ST 25 万、概念 93 万、行业 13 万、财务 24 万）。全区间过 `check.py` 体检门全绿（含时变涨跌停规则：创业板 2020-08-24 起 20%）；三个疑点均已定性（资金流缺"今天"=T+1 出数、茅台 10 差异日=除息日、标的数增长=市场扩容非跑漏）。**空间结论：2020~今全量 ~5G；补 2005~2019 约 12G——空间永不是约束**
+- ✅ **生产化规划定调（详细设计待 L3 后）**：三层存储 raw→derived→`signals/`（每日选股信号，只追加）；更新=一条命令（fetch 增量→check 门→build→打分），无守护进程；选股口径统一"截至 T-1 完整数据选 T 日股"（估值/资金流 T+1 出数，天然 PIT 安全）；外部比对仅用 AKShare 月度锚点日 + 季度 --force 历史片 diff
+- ✅ **分钟/tick 定位结论**：tick 历史聚宽本就没有（仅近期快照），永久搁置；分钟 K 历史有限且原始全量入库（~200GB/几十小时在线）与通道形态不匹配——**正确用法是将来"云端聚合、只取日频统计结果"**（尾盘动量/日内波动结构/量分布等），列为 L3 撞 IC 天花板后的预备役
 
 **下一步（按序歼灭）**
 1. **L3 评估层**：装 vectorbt，IC/RankIC/ICIR + 分层回测 + IS/OOS，跑通首批基线因子（动量/量能/估值/资金流各一）→ 验证：已知强信号（如放量负向）能被复现

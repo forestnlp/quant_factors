@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import glob
 import os
+from pathlib import Path
 
 import pandas as pd
 
 from research.config import raw_dir
 
-SINCE = "2025-01-04"      # 当前 raw 层的检查起点（与各数据集取数起点一致）
+SINCE = None               # 检查起点；None=自动取日线最早日
 
 
 def _load(name: str, cols: list[str] | None = None) -> pd.DataFrame:
@@ -45,10 +46,11 @@ def main() -> None:
     cal = set(_calendar())
     print("=" * 62)
     print("一、基础盘面")
-    daily = _load("daily")
+    daily = _load("daily", ["time", "code", "close", "paused", "post_close"])
     dcol = _col_date(daily)
     days_all = sorted(daily[dcol].unique())
-    exp = [d for d in sorted(cal) if SINCE <= d <= days_all[-1]]
+    since = SINCE or days_all[0]
+    exp = [d for d in sorted(cal) if since <= d <= days_all[-1]]
     print(f"日线: {len(daily)} 行, {days_all[0]} ~ {days_all[-1]}"
           f"（{len(days_all)} 个交易日）")
 
@@ -60,8 +62,9 @@ def main() -> None:
     print(f"日历外野日期 {len(not_in_cal)} 天"
           f"{' 野: ' + ','.join(not_in_cal[:10]) if not_in_cal else ' ✓'}")
     cnt = daily.groupby(dcol).size()
-    thin = cnt[cnt < 4500]
-    print(f"单日标的数过少(<4500): {len(thin)} 天"
+    floor = int(cnt.median() * 0.85)   # 相对阈值：标的数随年份增长，绝对值会误报
+    thin = cnt[cnt < floor]
+    print(f"单日标的数过少(<{floor}=中位85%): {len(thin)} 天"
           f"{' 例如: ' + str(thin.head(3).to_dict()) if len(thin) else ' ✓'}")
 
     print("\n三、日线内部质量")
@@ -124,29 +127,37 @@ def main() -> None:
             print(f"  {d}: {len(g)} 只, sw_l1 覆盖 {g['sw_l1'].astype(bool).mean():.3f}")
     print("=" * 62)
     print("六、数据清单（当前 raw 层拥有的一切）")
-    for name in ["daily", "valuation", "money_flow", "industry", "auction"]:
+    for name in ["daily", "valuation", "money_flow", "industry", "concept",
+                 "finance", "mtss", "billboard", "st", "auction"]:
         files = sorted(glob.glob(str(raw_dir("jq", name) / "*.csv")))
         if not files:
             print(f"  {name:12s}: 未取数")
             continue
         size = sum(os.path.getsize(f) for f in files) / 2**20
-        df = _load(name)
-        rng = f"{df[_col_date(df)].min()} ~ {df[_col_date(df)].max()}"
-        print(f"  {name:12s}: {len(files)} 片, {len(df)} 行, {size:.0f}MB, {rng}")
+        # 只数行、从文件名解析区间，不加载整表（daily/auction 已达数百万行）
+        total = sum(sum(1 for _ in open(f, encoding="utf-8")) - 1 for f in files)
+        lo = Path(files[0]).stem[len(name) + 1:].split("_")[0]
+        hi = Path(files[-1]).stem[len(name) + 1:].split("_")[-1]
+        print(f"  {name:12s}: {len(files)} 片, {total} 行, {size:.0f}MB, {lo} ~ {hi}")
 
 
-def _limit_bound(code: str) -> float:
-    """按板块推断涨跌幅限制（第三只眼：用交易所规则拷问数据）。"""
-    if code.startswith(("688", "300", "301")):
-        return 0.20                      # 科创板 / 创业板
+def _limit_bound(code: str, day: str) -> float:
+    """按板块+日期推断涨跌幅限制（第三只眼：规则本身也是时变的）。"""
+    if code.startswith(("688",)):
+        return 0.20                                  # 科创板自 2019 设立
+    if code.startswith(("300", "301")):
+        # 创业板 2020-08-24 注册制改 20%，之前 10%
+        return 0.20 if day >= "2020-08-24" else 0.10
     if code.startswith(("83", "87", "43", "92")):
-        return 0.30                      # 北交所
-    return 0.10                          # 主板
+        return 0.30                                  # 北交所（2021 起）
+    return 0.10                                      # 主板
 
 
 def deep_rules() -> None:
     """七、交易规则对抗审计：数据必须满足的外部常识。"""
-    daily = _load("daily")
+    cols = ["time", "code", "open", "high", "low", "close", "volume", "money",
+            "high_limit", "post_close"]
+    daily = _load("daily", cols)
     dcol = _col_date(daily)
     df = daily.dropna(subset=["close", "low", "high", "open"]).copy()
     df = df.sort_values(["code", dcol])
@@ -162,7 +173,8 @@ def deep_rules() -> None:
     # 交易所口径：涨停价 = round(除权后基准价 × (1+限幅), 0.01)。
     # 除权后基准价由 post/raw 比价跳变系数 k 反推（非除权日 k=1，自动统一）。
     ok["ratio"] = ok["high_limit"] / ok["pre_close"]
-    bound = ok["code"].map(_limit_bound)
+    bound = [ _limit_bound(c, d) for c, d in zip(ok["code"], ok["time"]) ]
+    bound = pd.Series(bound, index=ok.index)
     ok["dr"] = ok["post_close"] / ok["close"]
     k = (ok.groupby("code")["dr"].pct_change() + 1).clip(lower=1.0).fillna(1.0)
     pre_adj = ok["pre_close"] / k

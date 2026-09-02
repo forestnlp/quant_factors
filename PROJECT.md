@@ -31,9 +31,9 @@
 | `get_all_securities` | 含上市/退市日期 → 幸存者偏差免疫 |
 | download 通道 | 1.5MB/s，批量落盘主路（redis 中转实测慢 6 倍，弃） |
 
-**B. 文档确认存在、未实测**（`docs/jq/api.md` 核对，用前须小样本探针）：`get_valuation`（日频 PE/PB/市值）、`get_money_flow`（主力/大小单资金流）、`get_mtss`（两融）、`get_billboard_list`（龙虎榜）、`get_extras('is_st')`、`get_split_ratio`（拆送转，复权的真正原料）、`get_fundamentals` + `finance.STK_*`（财务三表 + **pub_date 公告日**）、`get_industry(date=)`（行业 PIT）、`get_concept_stocks`/`get_index_stocks`（概念/指数 PIT）、`get_ticks`（股票 tick 仅近期）、`macro.run_query`（宏观）。
+**B. 实测确认（2026-09-02 B 档探针，第二轮）**：`get_valuation`（日频全市场 5208 行，pe/pb/总市值/流通市值，单位亿元）、`get_money_flow`（主力/超大/大/中/小单净额与占比，无空值）、`get_mtss`（两融 9 列）、`get_extras('is_st')`、`get_billboard_list`（当日全市场 809 行）、`get_industry(date=)`（**行业 PIT 时变性实证**：中国石油 2010"采掘I"→2026"石油石化I"）、`get_concepts`/`get_concept_stocks`（399 概念）、`finance.STK_INCOME_STATEMENT`（**`pub_date`/`report_date` 字段实测存在**，经 `finance.run_query` 查询）。
 
-**C. 确认不可用/不可信**：`factor` 复权因子（实测恒 1）、前复权（官方自认未来函数）、2005 年前行情（2003 年请求返回 0 行，与官方文档一致）、长历史分钟线（待探针，预期有限）。
+**C. 确认不可用/不可信**：`factor` 复权因子（实测恒 1）、`get_split_ratio`（研究环境不存在该函数）、前复权（官方自认未来函数）、2005 年前行情、长历史分钟线、`jqdatasdk`（云端未装，只能用 `from jqdata import *`）。
 
 **硬约束（架构边界）**：远端执行默认 120s 超时（`--execution-timeout` 显式放宽）；Cookie 会被平台回收（`JqAuthError` fail-fast，更新 `.env` 后重跑续传）；官方研究环境限速 500Kbps 且禁批量导出用途 → **取数一次性成批、克制低频**，不得当数据服务。
 
@@ -43,19 +43,36 @@
 
 一个字段成为特征须过三关：**① PIT 可考**（T 日可知，不看未来）**② 有增量信息**（本地字段换算不出）**③ 评估引擎能吃**。不过关的字段越多越毒——"越多越好"以此为闸门。
 
+### 总体架构（四层，职责单向流动）
+
+```
+L1 raw 层    data/raw/jq/**          聚宽 CSV 分片，只追加，聚宽=唯一主源
+L2 特征层    data/derived/features/  宽表 parquet（date×code×特征），幂等重建
+L3 评估层    vectorbt + IC/IR + IS/OOS 切分，结果回喂因子库(duckdb/parquet)
+L4 挖掘层    LLM 假设器（白名单 pandas 表达式）← 失败案例回喂
+更新机制：fetch 重跑（断点续传）→ build 重跑（幂等）——无调度系统，一条命令即"定期更新"
+```
+
+**引擎定案（2026-09-02）**：评估/回测走 **vectorbt + 特征宽表**，不建 qlib bin——无二进制格式坑、pandas 全表达力（LLM 强项）、vectorbt 向量化原生支持 GPU（本机有显卡）、parquet 增量更新容易。qlib 降为可选导出格式，不进关键路径。老实现（qlib 表达式引擎等）在 git `42fc087`，仅参考不复用。
+
+**数据源纪律**：聚宽证明缺什么，才允许为那一样东西开第二源（AKShare/Tushare/爬虫暂时一个都不加——多一源=多一份口径仲裁噩梦，cn_data 教训）。
+
 ### 特征清单（raw 层，按更新频率分层）
 
 | 频率 | 数据集 | 关键字段 | 位置 | 状态 |
 |---|---|---|---|---|
 | 一次性 | 交易日历 | trade_days | `raw/jq/trading_calendar.csv` | ✅ 5263 天已落盘 |
 | 一次性 | 标的清单 | code, start/end_date, 名称 | `raw/jq/securities.csv` | 待取（daily 云端在用，但未落盘） |
-| 日度 | 日线 | 真实价 OHLCV+money、`high_limit`/`low_limit`/`paused` + 后复权 OHLC | `raw/jq/daily/` | **2025-01~2026-09 已落盘验证**（8 片 209.6 万行）；2005~2024 待补 |
-| 日度 | 估值 | pe/pb/market_cap/circulating_market_cap | `raw/jq/valuation/` | 探针→待取 |
-| 日度 | 资金流 | net_amount_main / net_pct_l 等 | `raw/jq/money_flow/` | 探针→待取 |
+| 日度 | 日线 | 真实价 OHLCV+money、`high_limit`/`low_limit`/`paused` + 后复权 OHLC | `raw/jq/daily/` | ✅ 2025-01~2026-09（8 片 209.6 万行）；2005~2024 待补 |
+| 日度 | 估值 | pe/pb/market_cap/circulating_market_cap | `raw/jq/valuation/` | ✅ 2025-01~2026-09（27 片 208.3 万行，与日线 join 99.1%） |
+| 日度 | 资金流 | net_amount_main / net_pct_l 等 12 列 | `raw/jq/money_flow/` | ✅ 2025-01~2026-09（8 片 211.4 万行） |
 | 日度 | 集合竞价 | 撮合价、竞价额、买卖一档量 | `raw/jq/auction/` | 待取（2010 起） |
-| 低频 | 两融/龙虎榜/拆送转/ST | get_mtss / get_billboard_list / get_split_ratio / get_extras | `raw/jq/…` | 探针→待取 |
-| 季度 | 行业 PIT | code, in_date, out_date（区间表） | `raw/jq/industry/` | 待取（防前视核心） |
-| 事件 | 财务公告日 | pub_date ≠ report_date | `raw/jq/finance/` | 待取（最高危未来函数） |
+| 低频 | 两融/龙虎榜/ST | get_mtss / get_billboard_list / get_extras | `raw/jq/…` | 能力已实测，待入库 |
+| 季度 | 概念成分 PIT | get_concept_stocks(399 概念) | `raw/jq/concept/` | ✅ 2025~2026（8 快照 34.9 万行；**成分确随时变**：半导体 2025-01=99 只 vs 2026-08=159 只） |
+| 季度 | 行业 PIT | sw_l1/l2、jq_l1、zjw 代码+名称（季度末快照） | `raw/jq/industry/` | ✅ 2025~2026（8 快照 3.6 万行）；历史待补 |
+| 事件 | 财务公告 | pub_date / report_date / end_date + 营收/净利/成本/EPS | `raw/jq/finance/` | ✅ 2024Q1~2026Q2（10 报告期 8.3 万行；含 report_type 预告；`run_query` 无 statDate，用 filter(end_date=)） |
+
+**取数实测边界（写码必守）**：`get_valuation` 单次约 **1 万行上限**（静默截断！须逐日查询）；`get_money_flow` 无此限；**估值数据 T 日盘前不可得**（T 当天行全 NaN，T+1 生成）→ 增量更新的 end 应取 T-1，L2 对 NaN 行做 drop。
 
 ### 复权口径（实测决策，搞错则全量作废）
 
@@ -95,7 +112,9 @@
 |---|---|
 | `config.py` | 路径统一读取：`raw_dir()` / `derived_dir()` / `jqcli_bin()` |
 | `jq_channel.py` | 聚宽云端通道：jqcli 三段式（exec→download→rm）、分片、认证 fail-fast、交易日历 |
-| `fetch.py` | 取数任务：`calendar` / `probe` / `daily` / `auction`，断点续跑 + 落盘覆盖核对 |
+| `fetch.py` | 取数任务：`calendar` / `probe` / `daily` / `auction` / `valuation` / `money_flow` / `industry` / `concept` / `finance`，断点续跑 + 落盘覆盖核对 |
+| `build.py` | **L2 特征层**：raw → `derived/features.parquet`（15 数值特征 + `fwd_ret_5` 标签，停牌 NaN 不填充）+ `industry/concept/finance.parquet` 维表；幂等可重建 |
+| `check.py` | **数据体检门**：完整性/日历对齐/跨数据集主键与语义校验 + 交易规则对抗审计（涨跌停交易所口径、价格带、额量价、资金流守恒）；每次增量取数后必跑 |
 
 评估（`factor_eval`）、因子库（`factor_lib`）、挖掘（`factor_miner`）、LLM 客户端（`llm_client`）等模块属于后续阶段，已在 git `42fc087` 保留，待特征底座成型后按需重写，不提前搬回。
 
@@ -103,8 +122,15 @@
 # 第一阶段主命令（按顺序）
 conda run -n jaycode python -m research.fetch calendar    # 最先：交易日历（已完成）
 conda run -n jaycode python -m research.fetch probe       # 通道与体积探针
-conda run -n jaycode python -m research.fetch daily       # 全市场日线 2005 起（真实价+后复权）
-conda run -n jaycode python -m research.fetch auction --start 2010-01-01
+conda run -n jaycode python -m research.fetch daily       # 全市场日线（真实价+后复权，默认 2025 起）
+conda run -n jaycode python -m research.fetch valuation   # 日频估值（逐日查询，15 天/片）
+conda run -n jaycode python -m research.fetch money_flow  # 日频资金流
+conda run -n jaycode python -m research.fetch industry --start 2025 --end 2026   # 行业 PIT 季快照
+conda run -n jaycode python -m research.fetch concept --start 2025 --end 2026   # 概念成分 PIT 季快照
+conda run -n jaycode python -m research.fetch finance --start 2024 --end 2026   # 财务公告（按报告期）
+conda run -n jaycode python -m research.fetch auction --start 2010-01-01         # 竞价
+conda run -n jaycode python -m research.build                                    # L2 宽表（raw 更新后重跑）
+conda run -n jaycode python -m research.check                                    # 数据体检门
 ```
 
 ## 进度与下一步
@@ -115,14 +141,15 @@ conda run -n jaycode python -m research.fetch auction --start 2010-01-01
 - ✅ 环境合并：jqcli 装入 conda `jaycode` 单环境，`.tools/venv-jqcli` 已删除
 - ✅ 交易日历落盘并读回核对（5263 天，2005-01-04 ~ 2026-09-02）
 - ✅ **日线小规模首战**：2025-01~2026-09 共 8 片 209.6 万行落盘；读回验证通过（行数≈理论值、涨跌停价=前收×1.1 精确、后复权比值随分红递增、双口径 NaN 一致）。实测单片（60 交易日×全市场）约 33MB/35s，比预估快一个量级
-- ✅ 项目聚焦重构：只留 3 个取数文件 + `docs/jq/`；旧数据/旧因子代码全部下线（git `42fc087` 可查）
+- ✅ 项目聚焦重构：只留取数引擎 + `docs/jq/`；旧数据/旧因子代码全部下线（git `42fc087` 可查）
+- ✅ **多维取齐 2025~今**：估值（208 万行，修复 1 万行静默截断）、资金流（208 万行）、行业 PIT、概念 PIT（34.9 万行）、财务公告含 pub_date（8.3 万行）——全部过 `check.py` 体检门（含交易规则对抗审计：涨跌停交易所口径、价格带、额量价、资金流守恒，全绿）
+- ✅ **L2 特征层建成**：`build.py` → `features.parquet` 209.6 万行 × 15 特征 + `fwd_ret_5` 标签；可用样本 196 万；茅台手工复算与宽表分毫不差
 
-**下一步（集中优势兵力打歼灭战：只做取数）**
-1. **全市场日线 88 片入库**（真实价+后复权双口径）→ 验证：每片打印行数/标的数/区间，收尾核对总覆盖 2005~今、行数 ≈ 标的日总数
-2. **竞价取数**（2010 起，5000 行/次限制下按 2500 只×日分组）→ 验证：同上覆盖核对
-3. **行业 PIT 区间表**（`get_industry(date=)` 按季取数折叠 in/out 区间）→ 验证：抽历史日期比对归属
-4. **财务公告日表**（`pub_date` 对齐，防最高危未来函数）→ 验证：抽样比对公告日 ≥ 报告期
-5. 取数全部落盘验证后，才进入特征加工（qlib bin）与挖掘阶段
+**下一步（按序歼灭）**
+1. **L3 评估层**：装 vectorbt，IC/RankIC/ICIR + 分层回测 + IS/OOS，跑通首批基线因子（动量/量能/估值/资金流各一）→ 验证：已知强信号（如放量负向）能被复现
+2. 估值/资金流 **end 取 T-1** 的增量更新演练一次（定期更新机制实弹验证）
+3. 竞价取数、2005~2024 历史补齐、行业/概念历史快照补齐（重跑命令即可，择机）
+4. L4 挖掘层（LLM 假设器 + 因子库记忆）待 L3 稳定后开
 
 ## 已确立的研究结论
 

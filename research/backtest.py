@@ -75,12 +75,13 @@ def topk_weights(feat: pd.DataFrame, col: str, k: int,
     return w
 
 
-def run(col: str, k: int, rebal: int, reverse: bool = False) -> None:
+def run(col: str, k: int, rebal: int, reverse: bool = False,
+        fee: float = FEE) -> None:
     price, tradable, feat = load_pivots()
     w = topk_weights(feat, col, k, tradable, rebal, reverse=reverse)
     pf = vbt.Portfolio.from_orders(
         price, size=w, size_type="targetpercent", cash_sharing=True,
-        fees=FEE, freq="1D", init_cash=1e8, call_seq="auto")
+        fees=fee, freq="1D", init_cash=1e8, call_seq="auto")
     pv = pf.value()          # cash_sharing=True → 单列净值
     if isinstance(pv, pd.DataFrame):
         pv = pv.iloc[:, 0]

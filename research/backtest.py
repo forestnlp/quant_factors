@@ -29,11 +29,13 @@ REBAL_DAYS = 5      # 调仓周期（交易日），与 fwd_ret_5 视野一致
 FEE = 0.0013        # 双边近似：佣金万2.5×2 + 卖出印花税 0.05%（2023-08 后）+ 滑点万5
 
 
-def load_pivots() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_pivots(with_industry: bool = False
+                ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """返回 (后复权价 pivot, 可交易布尔 pivot, 特征长表)。
 
     净值用后复权 post_close（收益率口径与 fwd_ret_5 一致，分红除息不失真）；
     可交易性判断用真实价 close vs high_limit（涨跌停仅此口径有意义）。
+    with_industry=True 时特征长表附加 sw_l1（季末快照 as-of，与 eval 同语义）。
     """
     f = pd.read_parquet(
         derived_dir() / "features.parquet",
@@ -47,6 +49,13 @@ def load_pivots() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
                    | (f["close"] < f["high_limit"] - 1e-6)).fillna(False))
     tr = f.assign(t=tradable).pivot(index="date", columns="code", values="t")
     tr = tr.fillna(False).astype(bool)   # pivot 空格会带出 NaN → 列变 object → numba 崩
+    if with_industry:
+        from research.eval import _asof_industry
+        ind = pd.read_parquet(derived_dir() / "industry.parquet")
+        ind = ind[["date", "code", "sw_l1"]].rename(columns={"date": "snap"})
+        ind["snap"] = pd.to_datetime(ind["snap"])
+        f = f.assign(dt=f["date"])       # _asof_industry 以 dt 为键
+        f = _asof_industry(f, ind)
     return price, tr, f
 
 
@@ -56,35 +65,43 @@ FEATURE_COLS: list[str] = []   # main() 里按参数填
 def topk_weights(feat: pd.DataFrame, col: str, k: int,
                  tradable: pd.DataFrame, rebal: int,
                  reverse: bool = False, buffer: int = 0,
-                 band: tuple[float, float] | None = None) -> pd.DataFrame:
+                 band: tuple[float, float] | None = None,
+                 neutral: bool = False, smooth: int = 0) -> pd.DataFrame:
     """每 rebal 交易日在可交易票中重选 Top-K → 目标权重 pivot。
 
     调仓日：入选票各 1/nsel，其余 0（清出榜）；非调仓日：整行 NaN（不出单）。
     reverse=False 取因子值最小端（负向因子），True 取最大端。
 
-    降换手机制（默认关，开启时等价原行为）：
-        buffer：缓冲带（只数）。已有持仓仅在截面名次跌出 k+buffer 才清出，
-                空位由 k 以内未持仓者按名次补位——砍掉"边缘反复进出"的无效换手。
-        band：截面名次分位带 (q_lo, q_hi]，仅允许带内票入选/留存。
-              如 (0.10, 0.50) 跳过最低 10%（D0 小票/流动性陷阱，见 PROJECT.md 结论8）。
+    机制（默认关，全关时等价原始 Top-K 行为）：
+        buffer：缓冲带只数——仅对"绝对名次型"信号有意义（band 关闭时）。
+        band：名次分位带 (q_lo, q_hi]，只在带内选。
+        neutral：分位改在"日×行业"内计算（行业中性选股，剥行业贝塔）。
+        smooth：对每日名次分位做逐股滚动均值（span 日），压换手。
     """
-    sub = feat[["date", "code", col]].merge(
+    cols = ["date", "code", col] + (["sw_l1"] if neutral else [])
+    sub = feat[cols].merge(
         tradable.stack().rename("t").reset_index(), on=["date", "code"])
     sub = sub[sub["t"] & sub[col].notna()]
+    grp = ["date"] + (["sw_l1"] if neutral else [])
+    rk = sub.groupby(grp)[col].rank(ascending=not reverse, method="first")
+    n = sub.groupby(grp)[col].transform("size")
+    q = (rk / n).rename("q")
+    sel = sub.assign(q=q.values)
+    if smooth:
+        sel = sel.sort_values(["code", "date"])
+        sel["q"] = (sel.groupby("code", sort=False)["q"]
+                    .transform(lambda s: s.rolling(
+                        smooth, min_periods=max(2, smooth // 3)).mean()))
     dates = sorted(feat["date"].unique())[::rebal]
-    sel = sub[sub["date"].isin(dates)]
-    rk = sel.groupby("date")[col].rank(ascending=not reverse, method="first")
-    n = sel.groupby("date")[col].transform("size")
-    q = rk / n                          # 升序名次分位 ∈ (0,1]
+    sel = sel[sel["date"].isin(dates)].sort_values("q")
     if band is not None:
-        sel = sel[(q >= band[0]) & (q <= band[1])]
-    sel = sel.assign(rk=rk.reindex(sel.index))
+        sel = sel[(sel["q"] >= band[0]) & (sel["q"] <= band[1])]
 
     w = pd.DataFrame(np.nan, index=tradable.index, columns=tradable.columns)
     held: set[str] = set()
     for d, g in sel.groupby("date"):
-        g = g.sort_values("rk")
-        # 带内按名次取前 k 为理想持仓、前 k+buffer 为可留存（band 后绝对名次不可直接用）
+        g = g.sort_values("q")
+        # 带内按分位取前 k 为理想持仓、前 k+buffer 为可留存
         keep = [c for c in g["code"].head(k + buffer) if c in held]
         quota = max(k - len(keep), 0)
         new = [c for c in g["code"].head(k) if c not in held][:quota]
@@ -99,10 +116,11 @@ def topk_weights(feat: pd.DataFrame, col: str, k: int,
 
 def run(col: str, k: int, rebal: int, reverse: bool = False,
         fee: float = FEE, buffer: int = 0,
-        band: tuple[float, float] | None = None, quiet: bool = False) -> dict:
-    price, tradable, feat = load_pivots()
+        band: tuple[float, float] | None = None, quiet: bool = False,
+        neutral: bool = False, smooth: int = 0) -> dict:
+    price, tradable, feat = load_pivots(with_industry=neutral)
     w = topk_weights(feat, col, k, tradable, rebal, reverse=reverse,
-                     buffer=buffer, band=band)
+                     buffer=buffer, band=band, neutral=neutral, smooth=smooth)
     pf = vbt.Portfolio.from_orders(
         price, size=w, size_type="targetpercent", cash_sharing=True,
         fees=fee, freq="1D", init_cash=1e8, call_seq="auto")
@@ -116,9 +134,10 @@ def run(col: str, k: int, rebal: int, reverse: bool = False,
     dd = (pv / pv.cummax() - 1).min()
     fees = float(pf.orders.fees.sum())   # 单组合下用属性访问（单列索引有歧义）
     band_s = f"  带[{band[0]:.2f},{band[1]:.2f}]" if band else ""
+    extra = ("  行业中性" if neutral else "") + (f"  平滑{smooth}" if smooth else "")
     if not quiet:
         print(f"=== 因子 {col}  Top-{k}  每 {rebal} 日调仓  buffer={buffer}"
-              f"{band_s}  双边费率 {fee:.2%}  做多{'大' if reverse else '小'}端 ===")
+              f"{band_s}{extra}  双边费率 {fee:.2%}  做多{'大' if reverse else '小'}端 ===")
         print(f"  区间 {pv.index[0].date()} ~ {pv.index[-1].date()}（{len(ret)} 交易日）")
         print(f"  累计 {float(pv.iloc[-1] - 1):+.1%}   年化 {float(ann):+.1%}   "
               f"Sharpe {float(shp):.2f}   最大回撤 {float(dd):.1%}   "
@@ -162,7 +181,12 @@ if __name__ == "__main__":
                     help="缓冲带只数：持仓跌出 k+buffer 才清出（0=关）")
     ap.add_argument("--band", default=None,
                     help="截面名次分位带，如 0.10,0.50（跳过最低10%%）")
+    ap.add_argument("--neutral", action="store_true",
+                    help="分位在日×行业内计算（行业中性选股）")
+    ap.add_argument("--smooth", type=int, default=0,
+                    help="名次分位逐股滚动均值天数（压换手，0=关）")
     a = ap.parse_args()
     FEATURE_COLS.append(a.factor)
     bd = tuple(float(x) for x in a.band.split(",")) if a.band else None
-    run(a.factor, a.k, a.rebal, a.reverse, buffer=a.buffer, band=bd)
+    run(a.factor, a.k, a.rebal, a.reverse, buffer=a.buffer, band=bd,
+        neutral=a.neutral, smooth=a.smooth)

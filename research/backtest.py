@@ -149,24 +149,37 @@ def run(col: str, k: int, rebal: int, reverse: bool = False,
     # 全部记入复牌首日，会把"tradable 子集"的日均收益系统性压低（实测 -22.7% vs +10%）。
     r_mkt = price.pct_change().mean(axis=1).dropna()
     ann_m = (1 + r_mkt).prod() ** (252 / len(r_mkt)) - 1
+    # 超额口径（alpha 裁判）：日频对齐后 组合-基准 的差值序列
+    idx = ret.index.intersection(r_mkt.index)
+    ex = ret.loc[idx] - r_mkt.loc[idx]
+    ann_ex = float((1 + ex).prod() ** (252 / len(ex)) - 1)
+    te = float(ex.std() * np.sqrt(252))                       # 跟踪误差
+    ir = float(ex.mean() / (ex.std() + 1e-12) * np.sqrt(252))  # 信息比率
+    beta = float(np.cov(ret.loc[idx], r_mkt.loc[idx])[0, 1] / np.var(r_mkt.loc[idx]))
+    corr = float(np.corrcoef(ret.loc[idx], r_mkt.loc[idx])[0, 1])
     if not quiet:
         print(f"  [基准] 全市场等权（后复权） 年化 {float(ann_m):+.1%}"
               f"（策略超额 {float(ann - ann_m):+.1%}）")
+        print(f"  [超额] 年化 {ann_ex:+.1%}  跟踪误差 {te:.1%}  IR {ir:.2f}   "
+              f"贝塔 {beta:.2f}  相关 {corr:.2f}")
     # IS/OOS 分段：与 eval.py 同切点（IS 调参、OOS 验收只看一次）
     res = {"ann": float(ann), "sharpe": float(shp), "dd": float(dd),
            "fees_pct": fees / 1e8, "n_orders": len(pf.orders),
-           "ann_mkt": float(ann_m)}
+           "ann_mkt": float(ann_m), "ann_ex": ann_ex, "te": te,
+           "ir": ir, "beta": beta, "corr": corr}
     split = pd.Timestamp(SPLIT)
-    for seg, r in (("IS", ret[ret.index < split]),
-                   ("OOS", ret[ret.index >= split])):
+    for seg, r, e in (("IS", ret[ret.index < split], ex[ex.index < split]),
+                      ("OOS", ret[ret.index >= split], ex[ex.index >= split])):
         if len(r) < 30:
             continue
         a_ = (1 + r).prod() ** (252 / len(r)) - 1
         s_ = r.mean() / (r.std() + 1e-12) * np.sqrt(252)
-        res[f"{seg}_ann"], res[f"{seg}_sharpe"] = float(a_), float(s_)
+        ir_ = float(e.mean() / (e.std() + 1e-12) * np.sqrt(252))
+        res[f"{seg}_ann"], res[f"{seg}_sharpe"], res[f"{seg}_ir"] = \
+            float(a_), float(s_), ir_
         if not quiet:
             print(f"  [{seg:3s}] {r.index[0].date()}~{r.index[-1].date()} "
-                  f"年化 {float(a_):+.1%}  Sharpe {float(s_):.2f}")
+                  f"年化 {float(a_):+.1%}  Sharpe {float(s_):.2f}  IR {ir_:.2f}")
     return res
 
 

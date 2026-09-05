@@ -27,6 +27,7 @@ from research.eval import SPLIT      # IS/OOS 切点与 eval 统一
 
 REBAL_DAYS = 5      # 调仓周期（交易日），与 fwd_ret_5 视野一致
 FEE = 0.0013        # 双边近似：佣金万2.5×2 + 卖出印花税 0.05%（2023-08 后）+ 滑点万5
+BORROW = 0.08       # 纸面对冲的融券成本（年化，从厚假设；实际 A股融券更难更贵）
 
 
 def load_pivots(with_industry: bool = False
@@ -74,7 +75,9 @@ def topk_weights(feat: pd.DataFrame, col: str, k: int,
 
     机制（默认关，全关时等价原始 Top-K 行为）：
         buffer：缓冲带只数——仅对"绝对名次型"信号有意义（band 关闭时）。
-        band：名次分位带 (q_lo, q_hi]，只在带内选。
+        band：**选择端分位带 (q_lo, q_hi]**——q 是相对选择端（reverse=False 为
+              低值端、True 为高值端）的分位，只在带内选。如低值端 (0.10,0.50]
+              = 跳过最低 10% 后从 D1 起选。
         neutral：分位改在"日×行业"内计算（行业中性选股，剥行业贝塔）。
         smooth：对每日名次分位做逐股滚动均值（span 日），压换手。
     """
@@ -180,6 +183,64 @@ def run(col: str, k: int, rebal: int, reverse: bool = False,
         if not quiet:
             print(f"  [{seg:3s}] {r.index[0].date()}~{r.index[-1].date()} "
                   f"年化 {float(a_):+.1%}  Sharpe {float(s_):.2f}  IR {ir_:.2f}")
+    return res
+
+
+def run_ls(col: str, k: int, rebal: int, fee: float = FEE,
+           band: tuple[float, float] = (0.10, 0.50),
+           short_q: float = 0.90, borrow: float = BORROW) -> dict:
+    """多空纸面对冲：多 band 带 + 空 D9 端（q>short_q），各 50% 资金。
+
+    纸面口径（回答"信号值不值钱"，非实盘可行性）：空头腿以"做空 D9 等权篮子"
+    近似——用 vbt 正算 D9 多头净值，取其日收益取负，另扣融券成本 borrow/252/日。
+    忽略保证金占用与券源可得性；净敞口≈0，业绩为纯截面价差，不 vs 基准。
+    及格线（PROJECT.md 结论11 预定）：费后年化>0 且 Sharpe>0.5。
+    """
+    price, tradable, feat = load_pivots()
+    bt = topk_weights(feat, col, k, tradable, rebal, band=band)
+    # 空头腿：reverse=True 从因子值最大端起选，band 仍是"选择端分位"→
+    # (0, short_q] 即最高的 short_q 分位（D9 高放量端）
+    st = topk_weights(feat, col, k, tradable, rebal, reverse=True,
+                      band=(0.0, short_q))
+
+    def leg_ret(w: pd.DataFrame) -> pd.Series:
+        pf = vbt.Portfolio.from_orders(
+            price, size=w, size_type="targetpercent", cash_sharing=True,
+            fees=fee, freq="1D", init_cash=1e8, call_seq="auto")
+        pv = pf.value()
+        if isinstance(pv, pd.DataFrame):
+            pv = pv.iloc[:, 0]
+        pv = pv.astype("float64") / 1e8
+        ret = pv.pct_change().dropna()
+        # 首行 pct_change 为 NaN 已被 drop；建仓日费用已含在净值内
+        return ret, len(pf.orders)
+
+    r_l, n_l = leg_ret(bt)
+    r_s, n_s = leg_ret(st)
+    idx = r_l.index.intersection(r_s.index)   # 两腿按日对齐
+    r_l, r_s = r_l.loc[idx], r_s.loc[idx]
+    r = 0.5 * r_l + 0.5 * (-r_s - borrow / 252)
+    ann = (1 + r).prod() ** (252 / len(r)) - 1
+    shp = r.mean() / (r.std() + 1e-12) * np.sqrt(252)
+    pv = (1 + r).cumprod()
+    dd = (pv / pv.cummax() - 1).min()
+    print(f"=== 纸面对冲  多{band} / 空 D9(q>{short_q})  Top-{k}  每 {rebal} 日  "
+          f"费率 {fee:.2%}+融券 {borrow:.0%}/年 ===")
+    print(f"  区间 {r.index[0].date()} ~ {r.index[-1].date()}（{len(r)} 日）  "
+          f"成交 多 {n_l} / 空 {n_s} 笔")
+    print(f"  年化 {float(ann):+.1%}  Sharpe {float(shp):.2f}  "
+          f"最大回撤 {float(dd):+.1%}")
+    print(f"  [毛口径-对照] 无融券费年化 "
+                  f"{float((1 + 0.5*r_l + 0.5*-r_s).prod() ** (252/len(r)) - 1):+.1%}")
+    res = {"ann": float(ann), "sharpe": float(shp), "dd": float(dd)}
+    split = pd.Timestamp(SPLIT)
+    for seg, x in (("IS", r[r.index < split]), ("OOS", r[r.index >= split])):
+        if len(x) < 30:
+            continue
+        a_ = (1 + x).prod() ** (252 / len(x)) - 1
+        s_ = x.mean() / (x.std() + 1e-12) * np.sqrt(252)
+        res[f"{seg}_ann"], res[f"{seg}_sharpe"] = float(a_), float(s_)
+        print(f"  [{seg:3s}] 年化 {float(a_):+.1%}  Sharpe {float(s_):.2f}")
     return res
 
 

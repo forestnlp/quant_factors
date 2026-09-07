@@ -14,7 +14,8 @@
        - T+1 公布（valuation / money_flow / mtss）  → 补到上一交易日，宁缺毋假
     4) 过 check 体检门（--deep 加对抗审计与增强件体检）→ 重建 L2 宽表
 
-季度类（industry / concept / finance）不进日更，按其节奏手动补跑对应 fetch 命令。
+季度类（industry / concept）与事件类（finance / finance_bs / finance_cf，
+按报告期出数）不进日更，按其节奏手动补跑对应 fetch 命令（同样断点续跑）。
 """
 
 from __future__ import annotations

@@ -492,6 +492,93 @@ def fetch_finance(start_year: int, end_year: int, force: bool = False) -> None:
     print(f"[finance] 覆盖核对: {len(files)} 个报告期, {total} 行")
 
 
+FINANCE_TABLE_TMPL = '''# -*- coding: utf-8 -*-
+# 财务三大表回填（资产负债表/现金流量表）：按报告期取全市场，code 分组避开分页上限。
+# 字段用 hasattr 动态选列：聚宽 xreport 字段名以云端表为准，缺失字段跳过并打印核对，
+# 不做静默假设（一手验证：跑完看 cols= 输出与预期清单差异）。
+from jqdata import *
+import os
+import pandas as pd
+
+PERIODS = {periods!r}
+TABLE = {table!r}
+WANT = {fields!r}
+t = getattr(finance, TABLE)
+cols = [c for c in WANT if hasattr(t, c)]
+print("table=%s cols=%s missing=%s" % (
+    TABLE, cols, [c for c in WANT if not hasattr(t, c)]))
+os.makedirs("jq_out", exist_ok=True)
+parts = []
+for end in PERIODS:
+    codes = get_all_securities("stock").index.tolist()
+    for i in range(0, len(codes), 1500):
+        q = query(t.code, t.pub_date, t.end_date,
+                  *[getattr(t, c) for c in cols]
+                  ).filter(t.end_date == end, t.code.in_(codes[i:i + 1500]))
+        parts.append(finance.run_query(q))
+df = pd.concat(parts, ignore_index=True).dropna(subset=["pub_date"])
+for c in ("pub_date", "end_date"):
+    df[c] = df[c].astype(str).str[:10]
+p = os.path.join("jq_out", "{{fname}}")
+df.to_csv(p, index=False)
+print("rows=%d codes=%d periods=%d size=%.1fMB" % (
+    len(df), df["code"].nunique(), df["end_date"].nunique(),
+    os.path.getsize(p) / 1048576.0))
+'''
+
+# 字段清单（成长/质量因子原料，宁缺毋滥——过 PIT/增量/可编译三关才进清单）
+BS_FIELDS = ["total_assets", "total_liab", "total_owner_equities",
+             "monetory_funds", "accounts_receivable", "inventories",
+             "fixed_asset", "good_will"]
+CF_FIELDS = ["net_operate_cash_flow", "net_invest_cash_flow",
+             "net_finance_cash_flow", "cash_sales_goods"]
+
+
+def _fetch_finance_table(name: str, table: str, fields: list[str],
+                         start_year: int, end_year: int,
+                         force: bool = False) -> None:
+    """财务表按报告期分片回填 → data/raw/jq/<name>/finance_<报告期>.csv，断点续跑。"""
+    out_dir = raw_dir("jq", name)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    last_cal = max(jq.trading_days("2005-01-04", "2099-12-31"))
+    periods = []
+    for y in range(start_year, end_year + 1):
+        for md in ("03-31", "06-30", "09-30", "12-31"):
+            p = f"{y}-{md}"
+            if p <= last_cal:
+                periods.append(p)
+    todo = [p for p in periods
+            if force or not (out_dir / f"finance_{p}.csv").exists()]
+    print(f"[{name}] 报告期 {len(periods)} 个（本次取 {len(todo)}）")
+    for i, p in enumerate(todo, 1):
+        f = out_dir / f"finance_{p}.csv"
+        print(f"  [{i}/{len(todo)}] 报告期 {p}", flush=True)
+        try:
+            jq.run_script(FINANCE_TABLE_TMPL.format(
+                periods=[p], table=table, fields=fields, fname=f.name),
+                f.name, f, timeout=1800, exec_timeout=1500)
+        except jq.JqAuthError as e:
+            print(f"  [中止] {e}")
+            return
+    files = sorted(out_dir.glob("finance_*.csv"))
+    total = sum(sum(1 for _ in open(x, encoding="utf-8")) - 1 for x in files)
+    print(f"[{name}] 覆盖核对: {len(files)} 个报告期, {total} 行")
+
+
+def fetch_finance_bs(start_year: int, end_year: int,
+                     force: bool = False) -> None:
+    """资产负债表（pub_date 公告日对齐）→ data/raw/jq/finance_bs/"""
+    _fetch_finance_table("finance_bs", "STK_BALANCE_SHEET", BS_FIELDS,
+                         start_year, end_year, force)
+
+
+def fetch_finance_cf(start_year: int, end_year: int,
+                     force: bool = False) -> None:
+    """现金流量表（pub_date 公告日对齐）→ data/raw/jq/finance_cf/"""
+    _fetch_finance_table("finance_cf", "STK_CASHFLOW_STATEMENT", CF_FIELDS,
+                         start_year, end_year, force)
+
+
 def fetch_mtss(start: str, end: str, chunk_days: int = 30,
                force: bool = False) -> None:
     """融资融券 → data/raw/jq/mtss/"""
@@ -517,7 +604,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="聚宽取数任务")
     ap.add_argument("task", choices=["calendar", "probe", "daily", "auction",
                                      "valuation", "money_flow", "industry",
-                                     "concept", "finance", "mtss", "billboard",
+                                     "concept", "finance", "finance_bs",
+                                     "finance_cf", "mtss", "billboard",
                                      "st"])
     ap.add_argument("--start", default="2025-01-04",
                     help="起始日期（industry/concept/finance 任务传年份如 2025）；"
@@ -544,6 +632,10 @@ def main() -> None:
         fetch_concept(int(a.start[:4]), int(a.end[:4]), a.force)
     elif a.task == "finance":
         fetch_finance(int(a.start[:4]), int(a.end[:4]), a.force)
+    elif a.task == "finance_bs":
+        fetch_finance_bs(int(a.start[:4]), int(a.end[:4]), a.force)
+    elif a.task == "finance_cf":
+        fetch_finance_cf(int(a.start[:4]), int(a.end[:4]), a.force)
     elif a.task == "mtss":
         fetch_mtss(a.start, a.end, a.chunk_days or 30, a.force)
     elif a.task == "billboard":

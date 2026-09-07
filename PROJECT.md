@@ -76,9 +76,9 @@ L4 挖掘层    LLM 假设器（白名单 pandas 表达式）← 失败案例回
 | 日度 | ST 标记 | is_st 长表（只存 True） | `raw/jq/st/` | ✅ 2020~2026（25.4 万行） |
 | 季度 | 概念成分 PIT | get_concept_stocks(399 概念) | `raw/jq/concept/` | ✅ 2020~2026（28 快照 92.7 万行；**成分确随时变**：半导体 2025-01=99 只 vs 2026-08=159 只） |
 | 季度 | 行业 PIT | sw_l1/l2、jq_l1、zjw 代码+名称（季度末快照） | `raw/jq/industry/` | ✅ 2020~2026（28 快照 13 万行） |
-| 事件 | 财务公告 | pub_date / report_date / end_date + 营收/净利/成本/EPS | `raw/jq/finance/` | ✅ 2020Q1~2026Q2（26 报告期 24.1 万行；含 report_type 预告；`run_query` 无 statDate，用 filter(end_date=)） |
-| 事件 | 资产负债表 | pub_date/end_date + 总资产/权益/存货/商誉（**聚宽表无 total_liab 等 4 字段名，待真实 schema 重找补取**） | `raw/jq/finance_bs/` | ✅ 2020Q1~2026Q2（26 期 21.3 万行；pub_date 全非空，权益/总资产中位 0.591 合理） |
-| 事件 | 现金流量表 | pub_date/end_date + 经营/投资/筹资净额/销售收现 | `raw/jq/finance_cf/` | ✅ 2020Q1~2026Q2（26 期 24.1 万行） |
+| 事件 | 财务公告 | pub_date / report_date / end_date + 营收/净利/成本/EPS | `raw/jq/finance/` | ✅ 2019Q1~2026Q2（30 期 27.4 万行；`run_query` 无 statDate，用 filter(end_date=)；**累计口径**经茅台核对确证） |
+| 事件 | 资产负债表 | pub_date/end_date + 总资产/负债/权益/流动资产负债/货币(cash_equivalents)/应收/存货/固定资产/商誉 | `raw/jq/finance_bs/` | ✅ 2019Q1~2026Q2（30 期；字段名以云端 dir() 探针为准） |
+| 事件 | 现金流量表 | pub_date/end_date + 经营/投资/筹资净额 | `raw/jq/finance_cf/` | ✅ 2019Q1~2026Q2（30 期） |
 
 **取数实测边界（写码必守）**：`get_valuation` 单次约 **1 万行上限**（静默截断！须逐日查询）；`get_money_flow` 无此限；**估值数据 T 日盘前不可得**（T 当天行全 NaN，T+1 生成）→ 增量更新的 end 应取 T-1，L2 对 NaN 行做 drop。
 
@@ -197,7 +197,7 @@ conda run -n jaycode python -m research.check                                   
 
 **下一步**
 1. ~~update.py 真实缺口实弹~~ ✅ **2026-09-07 首战全胜**：新 Cookie 下补 09-03~09-07 缺口（七数据集）→ check 体检门全绿 → 宽表重建至 2026-09-07（776 万行/1620 天/可用样本 758 万）。"断点续跑=更新机制"实战闭环成立
-2. ~~财务三表回填~~ ✅ **bs+cf 共 52 期 45.4 万行落盘**（含 `{{fname}}` 转义笔误修复与一次静默中断的断点续跑自愈）。**遗留**：bs 缺 4 字段（聚宽真实字段名与假想不符）；build 扩列+check 校验待做
+2. ~~财务三表回填~~ ✅ **bs+cf+inc 三表 2019Q1~2026Q2 共 90 期落盘**，并已建成 **9 个 PIT 财务特征**入宽表（`fin_roe_ttm/fin_gross/fin_opm/fin_rev_yoy/fin_np_yoy/fin_cash_quality/fin_debt/fin_cash_asset/fin_goodwill_eq`）。口径：累计值→TTM（手工对答案：茅台 51.80bn 精确命中、ROE 30.9%、毛利率 91.4%）；更正披露取首版；PIT 生效日=三表 pub_date 取晚。check 新增"九、财务三表体检"：pub_date 零缺失、**BS 恒等式 24.28 万行仅 10 违例**、宽表覆盖率 99%。**教训入则**：期间平移方向是未来函数高发区——首版把源行回拨=取到未来值（茅台 ROE 为负当场暴露），已注释警示；`DateOffset` 月份滚动须 MonthEnd 吸附（09-30+3m=12-30 坑）。
 3. **现货约束下的弹药重验收**：三强候选（v_amt/auc/vlm）按验证协议 v2 跑滚动 WFO + 绝对收益/回撤口径（基准换沪深300/中证500），产出可执行域内的第一个"产品"
 4. 因子库档案已建：**FACTORS.md**（三候选+两封存+一回喂原料，L4 因子库表的结构蓝本）
 5. L4 自动化挖掘（LLM 假设器为目标形态，先以"人肉闭环"彩排铺轨；开工前过七形态对策表）

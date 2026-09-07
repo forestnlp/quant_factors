@@ -527,11 +527,13 @@ print("rows=%d codes=%d periods=%d size=%.1fMB" % (
 '''
 
 # 字段清单（成长/质量因子原料，宁缺毋滥——过 PIT/增量/可编译三关才进清单）
-BS_FIELDS = ["total_assets", "total_liab", "total_owner_equities",
-             "monetory_funds", "accounts_receivable", "inventories",
-             "fixed_asset", "good_will"]
+# 字段名以 2026-09-07 云端 dir() 探针为准（125 列）：无 monetory_funds，货币资金=cash_equivalents
+BS_FIELDS = ["total_assets", "total_liability", "total_owner_equities",
+             "total_current_assets", "total_current_liability",
+             "cash_equivalents", "account_receivable", "inventories",
+             "fixed_assets", "good_will"]
 CF_FIELDS = ["net_operate_cash_flow", "net_invest_cash_flow",
-             "net_finance_cash_flow", "cash_sales_goods"]
+             "net_finance_cash_flow"]
 
 
 def _fetch_finance_table(name: str, table: str, fields: list[str],

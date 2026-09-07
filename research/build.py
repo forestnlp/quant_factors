@@ -30,6 +30,109 @@ def _load_raw(name: str) -> pd.DataFrame:
     return pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
 
 
+def _shift_merge(f: pd.DataFrame, col: str, years: int = 0,
+                 months: int = 0, fy: bool = False) -> pd.Series:
+    """col 按报告期回拨后的值（对齐 f 行序）；fy=True 取上一年 12-31 值。
+
+    用于累计口径 → TTM 换算（聚宽利润表/现金流量表是年度内累计值）。
+    方向注意：把**源行**的 end_date 前移成它服务的目标期，再按 f 原键 merge
+    （首版实现把源行回拨=取到未来值，茅台手工核对 ROE 为负当场暴露）。
+    fy 分支不同：任意目标期都要取"上一年年报"，键形态不同构，须把**目标键**
+    换算回源期（y-1 年 12-31）再查；月份滚动统一吸附月末（09-30+3m=12-30 坑）。
+    """
+    t = f[["code", "end_date", col]].copy()
+    if fy:
+        key = f[["code", "end_date"]].copy()
+        key["end_date"] = ((key["end_date"].str[:4].astype(int) - 1)
+                           .astype(str) + "-12-31")
+        m = key.merge(t, on=["code", "end_date"], how="left", sort=False)
+        return m[col]
+    t["end_date"] = ((pd.to_datetime(t["end_date"])
+                      + pd.DateOffset(years=years, months=months))
+                     + pd.offsets.MonthEnd(0)).dt.strftime("%Y-%m-%d")
+    m = f[["code", "end_date"]].merge(
+        t, on=["code", "end_date"], how="left", sort=False)
+    return m[col]
+
+
+def _fin_prep(name: str, cols: list[str]) -> pd.DataFrame:
+    """财报表 → 首版披露 + TTM 派生，PIT 生效日=pub_date。
+
+    同一 (code,end_date) 多次披露（更正公告）取**首次披露**：T 日可见口径
+    即当时披露值，更正随下一报告期自然滚入——标准 point-in-time 处理。
+    """
+    f = _load_raw(name).dropna(subset=["pub_date"])
+    f = f.sort_values(["code", "end_date", "pub_date"])
+    f = f.groupby(["code", "end_date"], as_index=False).first()
+    f = f.sort_values(["code", "end_date"]).reset_index(drop=True)
+    for c in cols:
+        f[f"{c}_ttm"] = f[c] + _shift_merge(f, c, fy=True) \
+            - _shift_merge(f, c, years=1)
+    return f
+
+
+def _fin_yoy(sq: pd.DataFrame, col: str = "sq_rev") -> pd.Series:
+    """单季同比：sq 与去年同季（sq_y1）比；分母取 |去年同季| 防亏损股符号失真。"""
+    t = sq[["code", "end_date", col]].copy()
+    t["end_date"] = (pd.to_datetime(t["end_date"])
+                     + pd.DateOffset(years=1)).dt.strftime("%Y-%m-%d")
+    m = sq[["code", "end_date"]].merge(
+        t, on=["code", "end_date"], how="left", sort=False)
+    den = m[col].abs().replace(0, np.nan)
+    return (sq[col] - m[col]) / den
+
+
+def _fin_quarterly() -> pd.DataFrame:
+    """三表 → (code, end_date) 粒度的 PIT 财务特征 + 生效日 eff（三表 pub_date 取晚）。"""
+    inc = _fin_prep("finance", ["operating_revenue", "operating_cost",
+                                "operating_profit", "net_profit"])
+    cf = _fin_prep("finance_cf", ["net_operate_cash_flow"])
+    bs = _fin_prep("finance_bs", [])
+    f = (inc[["code", "end_date", "pub_date", "operating_revenue",
+              "operating_cost", "operating_profit", "net_profit",
+              "operating_revenue_ttm", "operating_cost_ttm",
+              "operating_profit_ttm", "net_profit_ttm"]]
+         .rename(columns={"pub_date": "pub_inc"})
+         .merge(cf[["code", "end_date", "pub_date", "net_operate_cash_flow_ttm"]]
+                .rename(columns={"pub_date": "pub_cf"}),
+                on=["code", "end_date"], how="left")
+         .merge(bs[["code", "end_date", "pub_date", "total_assets",
+                    "total_liability", "total_owner_equities",
+                    "cash_equivalents", "good_will"]]
+                .rename(columns={"pub_date": "pub_bs"}),
+                on=["code", "end_date"], how="left"))
+    f["eff"] = f[["pub_inc", "pub_cf", "pub_bs"]].max(axis=1)
+    f = f.dropna(subset=["eff"])   # 三表公告日不全的报告期无法 PIT 使用
+    # 单季营收/净利（累计-上一累计期；Q1 即累计）→ 同比
+    q1 = f["end_date"].str.endswith("03-31")
+    f["sq_rev"] = np.where(q1, f["operating_revenue"],
+                           f["operating_revenue"]
+                           - _shift_merge(f, "operating_revenue", months=3))
+    f["sq_np"] = np.where(q1, f["net_profit"],
+                          f["net_profit"] - _shift_merge(f, "net_profit",
+                                                         months=3))
+    f["fin_rev_yoy"] = _fin_yoy(f)
+    f["fin_np_yoy"] = _fin_yoy(f, "sq_np")
+    rev = f["operating_revenue_ttm"].where(
+        f["operating_revenue_ttm"].abs() > 1e6)
+    eq = f["total_owner_equities"].where(
+        f["total_owner_equities"].abs() > 1e6)
+    f["fin_roe_ttm"] = f["net_profit_ttm"] / eq
+    f["fin_gross"] = 1 - f["operating_cost_ttm"] / rev
+    f["fin_opm"] = f["operating_profit_ttm"] / rev
+    f["fin_cash_quality"] = (f["net_operate_cash_flow_ttm"]
+                             / f["net_profit_ttm"].abs().replace(0, np.nan))
+    ta = f["total_assets"].where(f["total_assets"].abs() > 1e6)
+    f["fin_debt"] = f["total_liability"] / ta
+    f["fin_cash_asset"] = f["cash_equivalents"] / ta
+    # 无商誉公司聚宽存 NaN，语义=0（覆盖一半属正常，但语义须摆正）
+    f["fin_goodwill_eq"] = f["good_will"].fillna(0.0) / eq
+    cols = ["code", "end_date", "eff", "fin_roe_ttm", "fin_gross", "fin_opm",
+            "fin_rev_yoy", "fin_np_yoy", "fin_cash_quality", "fin_debt",
+            "fin_cash_asset", "fin_goodwill_eq"]
+    return f[cols]
+
+
 def build_features() -> pd.DataFrame:
     """数值特征宽表。列名规范：r_ 收益动量 / v_ 量能波动 / vlm 估值 / mf 资金流。"""
     d = _load_raw("daily").drop_duplicates(subset=["time", "code"])
@@ -122,6 +225,16 @@ def build_features() -> pd.DataFrame:
                 how="left")
     d["st_flag"] = d["st_flag"].fillna(0.0)
 
+    # 财务三表 PIT 特征（生效日=该报告期三表 pub_date 的最大值，保守安全；
+    # 累计口径→TTM；更正披露取首版；as-of backward 无 tolerance=最近已知值语义）
+    fin = _fin_quarterly()
+    fin["eff_dt"] = pd.to_datetime(fin["eff"])
+    d = pd.merge_asof(
+        d.sort_values("date_dt").reset_index(drop=True),
+        fin.sort_values("eff_dt"),
+        left_on="date_dt", right_on="eff_dt", by="code",
+        direction="backward")
+
     keep = ["date", "code", "close", "post_close", "paused", "high_limit", "low_limit",
             "st_flag",
             "r_1", "r_5d", "r_10d", "r_20d", "r_60d",
@@ -130,6 +243,8 @@ def build_features() -> pd.DataFrame:
             "pe_ratio", "pb_ratio", "vlm_ln_mv", "vlm_ln_circ", "vlm_turnover",
             "mf_net_pct_main", "mf_net_pct_l",
             "auc_imb", "auc_money_share", "mt_fin_ratio", "bb_yest",
+            "fin_roe_ttm", "fin_gross", "fin_opm", "fin_rev_yoy", "fin_np_yoy",
+            "fin_cash_quality", "fin_debt", "fin_cash_asset", "fin_goodwill_eq",
             "fwd_ret_5"]
     feat = d[keep].copy()
     feat.to_parquet(derived_dir() / "features.parquet", index=False)

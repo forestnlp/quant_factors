@@ -17,7 +17,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-from research.config import raw_dir
+from research.config import raw_dir, derived_dir
 
 SINCE = None               # 检查起点；None=自动取日线最早日
 
@@ -280,6 +280,33 @@ def new_sets() -> None:
     both = m[m["is_st"] == 1].merge(
         daily.rename(columns={dcol: "d"}), on=["d", "code"])
     print(f"ST 行在日线中可寻率: {len(both) / max(rate * len(m), 1):.3f}（信息项）")
+
+    # 财务三表（事件频率）：pub_date 完备性 + BS 恒等式对抗审计 + TTM 交叉
+    print("\n九、财务三表体检")
+    for nm in ("finance", "finance_bs", "finance_cf"):
+        f = _load(nm, ["code", "pub_date", "end_date"])
+        f = f.drop_duplicates(subset=["code", "end_date"])
+        bad = int(f["pub_date"].isna().sum())
+        print(f"{nm}: {len(f)} 期行(去重), 期间 {f['end_date'].min()} ~ "
+              f"{f['end_date'].max()}, pub_date 缺失 {bad}"
+              + (" ✓" if bad == 0 else " ！"))
+    bs = _load("finance_bs", ["code", "end_date", "total_assets",
+                              "total_liability", "total_owner_equities"])
+    bs = bs.dropna(subset=["total_assets", "total_liability",
+                           "total_owner_equities"])
+    resid = (bs["total_assets"] - bs["total_liability"]
+             - bs["total_owner_equities"]).abs()
+    den = bs["total_assets"].abs().clip(lower=1e6)
+    bad = int((resid / den > 0.005).sum())
+    print(f"BS 恒等式(资产=负债+权益 ±0.5%)违例: {bad}/{len(bs)}"
+          + (" ✓" if bad < len(bs) * 0.02 else " ！"))
+    fin = pd.read_parquet(derived_dir() / "features.parquet",
+                          columns=["date", "fin_roe_ttm", "fin_gross",
+                                   "fin_debt"])
+    late = fin[fin["date"] >= "2025-06-01"]
+    cov = late[["fin_roe_ttm", "fin_gross", "fin_debt"]].notna().mean()
+    print(f"宽表 fin 覆盖率(2025-06后): {cov.round(3).to_dict()}"
+          + (" ✓" if float(cov.min()) > 0.9 else " ！"))
 
 
 if __name__ == "__main__":

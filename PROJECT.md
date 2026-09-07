@@ -77,8 +77,8 @@ L4 挖掘层    LLM 假设器（白名单 pandas 表达式）← 失败案例回
 | 季度 | 概念成分 PIT | get_concept_stocks(399 概念) | `raw/jq/concept/` | ✅ 2020~2026（28 快照 92.7 万行；**成分确随时变**：半导体 2025-01=99 只 vs 2026-08=159 只） |
 | 季度 | 行业 PIT | sw_l1/l2、jq_l1、zjw 代码+名称（季度末快照） | `raw/jq/industry/` | ✅ 2020~2026（28 快照 13 万行） |
 | 事件 | 财务公告 | pub_date / report_date / end_date + 营收/净利/成本/EPS | `raw/jq/finance/` | ✅ 2020Q1~2026Q2（26 报告期 24.1 万行；含 report_type 预告；`run_query` 无 statDate，用 filter(end_date=)） |
-| 事件 | 资产负债表 | pub_date/end_date + 总资产/负债/权益/货币/应收/存货/固定资产/商誉 | `raw/jq/finance_bs/` | 待取（任务 `fetch finance_bs` 已备好，2020~今） |
-| 事件 | 现金流量表 | pub_date/end_date + 经营/投资/筹资净额/销售收现 | `raw/jq/finance_cf/` | 待取（任务 `fetch finance_cf` 已备好，2020~今） |
+| 事件 | 资产负债表 | pub_date/end_date + 总资产/权益/存货/商誉（**聚宽表无 total_liab 等 4 字段名，待真实 schema 重找补取**） | `raw/jq/finance_bs/` | ✅ 2020Q1~2026Q2（26 期 21.3 万行；pub_date 全非空，权益/总资产中位 0.591 合理） |
+| 事件 | 现金流量表 | pub_date/end_date + 经营/投资/筹资净额/销售收现 | `raw/jq/finance_cf/` | ✅ 2020Q1~2026Q2（26 期 24.1 万行） |
 
 **取数实测边界（写码必守）**：`get_valuation` 单次约 **1 万行上限**（静默截断！须逐日查询）；`get_money_flow` 无此限；**估值数据 T 日盘前不可得**（T 当天行全 NaN，T+1 生成）→ 增量更新的 end 应取 T-1，L2 对 NaN 行做 drop。
 
@@ -196,8 +196,8 @@ conda run -n jaycode python -m research.check                                   
 2026 年 Agent 框架竞争焦点已收敛到**状态治理/故障恢复/可观测**——恰是七形态表 #6/#7（成本失控、静默卡死）的解药，与本项目需求精确对位。硬约束过滤：本地 Qwen（OpenAI 兼容）+ R4-8 零外泄 → 云端 tracing（LangSmith 云）与云绑定框架（ADK/Bedrock）出局；AutoGen 官方已入维护模式，新项目排除；CrewAI/smolagents 偏"角色链/代码生成"自主范式，与我们"流程代码写死、只在假设器节点调 LLM"的确定性闭环不匹配。**首选 = LangGraph 开源版**（有向状态图 + checkpoint 本地落盘续跑 = 断点续跑哲学同源 + human-in-the-loop + 条件路由用代码不靠 LLM）。**但暂不定案**：框架是重承诺，闭环形状（节点/状态 schema/路由条件）要先靠"人肉彩排"跑实，届时把彩排沉淀的 `propose→compile→judge→memorize` 函数图化即迁移完成。实装前补验一枪：本地 Qwen 的 function-calling 质量（不行则用结构化输出+解析兜底，LangGraph 不强制 tool-calling）。
 
 **下一步**
-1. **update.py 真实缺口实弹**（2026-09-07 首跑：机制正确 fail-fast，但 `JQCLI_COOKIE` 过期中止，零脏数据——待用户更新 .env 后重跑即续传，补 09-03~09-07 缺口）
-2. **财务三表回填**（任务已备好 `fetch finance_bs / finance_cf`，2020~今按报告期断点续跑；与 update 共用通道锁，等 cookie 恢复一起打；落地后 build 扩列 + 挂季度更新节奏）
+1. ~~update.py 真实缺口实弹~~ ✅ **2026-09-07 首战全胜**：新 Cookie 下补 09-03~09-07 缺口（七数据集）→ check 体检门全绿 → 宽表重建至 2026-09-07（776 万行/1620 天/可用样本 758 万）。"断点续跑=更新机制"实战闭环成立
+2. ~~财务三表回填~~ ✅ **bs+cf 共 52 期 45.4 万行落盘**（含 `{{fname}}` 转义笔误修复与一次静默中断的断点续跑自愈）。**遗留**：bs 缺 4 字段（聚宽真实字段名与假想不符）；build 扩列+check 校验待做
 3. **现货约束下的弹药重验收**：三强候选（v_amt/auc/vlm）按验证协议 v2 跑滚动 WFO + 绝对收益/回撤口径（基准换沪深300/中证500），产出可执行域内的第一个"产品"
 4. 因子库档案已建：**FACTORS.md**（三候选+两封存+一回喂原料，L4 因子库表的结构蓝本）
 5. L4 自动化挖掘（LLM 假设器为目标形态，先以"人肉闭环"彩排铺轨；开工前过七形态对策表）

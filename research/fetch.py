@@ -519,7 +519,7 @@ for end in PERIODS:
 df = pd.concat(parts, ignore_index=True).dropna(subset=["pub_date"])
 for c in ("pub_date", "end_date"):
     df[c] = df[c].astype(str).str[:10]
-p = os.path.join("jq_out", "{{fname}}")
+p = os.path.join("jq_out", "{fname}")
 df.to_csv(p, index=False)
 print("rows=%d codes=%d periods=%d size=%.1fMB" % (
     len(df), df["code"].nunique(), df["end_date"].nunique(),

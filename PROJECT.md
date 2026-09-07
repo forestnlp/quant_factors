@@ -191,7 +191,11 @@ conda run -n jaycode python -m research.check                                   
 3. **新鲜考卷由时间生产**：每日 update 落盘后，最新一段数据天然是所有历史决策的样本外——update 机制是本协议的基础设施；
 4. LLM 挖掘时代沿用 L4 七形态表 #3：裁判对挖掘端只暴露当前 IS 窗口，验收窗口封存。
 
- **下一步**
+ ### L4 框架选型初步结论（2026-09-07 调研，定案等彩排）
+
+2026 年 Agent 框架竞争焦点已收敛到**状态治理/故障恢复/可观测**——恰是七形态表 #6/#7（成本失控、静默卡死）的解药，与本项目需求精确对位。硬约束过滤：本地 Qwen（OpenAI 兼容）+ R4-8 零外泄 → 云端 tracing（LangSmith 云）与云绑定框架（ADK/Bedrock）出局；AutoGen 官方已入维护模式，新项目排除；CrewAI/smolagents 偏"角色链/代码生成"自主范式，与我们"流程代码写死、只在假设器节点调 LLM"的确定性闭环不匹配。**首选 = LangGraph 开源版**（有向状态图 + checkpoint 本地落盘续跑 = 断点续跑哲学同源 + human-in-the-loop + 条件路由用代码不靠 LLM）。**但暂不定案**：框架是重承诺，闭环形状（节点/状态 schema/路由条件）要先靠"人肉彩排"跑实，届时把彩排沉淀的 `propose→compile→judge→memorize` 函数图化即迁移完成。实装前补验一枪：本地 Qwen 的 function-calling 质量（不行则用结构化输出+解析兜底，LangGraph 不强制 tool-calling）。
+
+**下一步**
 1. **update.py 真实缺口实弹**（2026-09-07 首跑：机制正确 fail-fast，但 `JQCLI_COOKIE` 过期中止，零脏数据——待用户更新 .env 后重跑即续传，补 09-03~09-07 缺口）
 2. **财务三表回填**（任务已备好 `fetch finance_bs / finance_cf`，2020~今按报告期断点续跑；与 update 共用通道锁，等 cookie 恢复一起打；落地后 build 扩列 + 挂季度更新节奏）
 3. **现货约束下的弹药重验收**：三强候选（v_amt/auc/vlm）按验证协议 v2 跑滚动 WFO + 绝对收益/回撤口径（基准换沪深300/中证500），产出可执行域内的第一个"产品"

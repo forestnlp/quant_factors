@@ -2,7 +2,7 @@
 
 > 用途：任何新会话恢复任务的唯一入口。PROJECT.md 是现状全貌，本文件是"现在在哪、下一步打什么、怎么打"。
 > 维护纪律：每场战役结束/路线改判/重大发现时更新本文件（与 PROJECT.md 同步），随代码一起提交。
-> 最后更新：2026-09-09（人肉彩排三轮完成：第一个 product 因子 a_rev_x_lowvol 诞生；PROPOSE.md 作业规范成文）
+> 最后更新：2026-09-09（WFO 首考通过：a_rev_x_lowvol 转正坐实；wfo.py 上线）
 
 ## 一、我们在做什么（30 秒版）
 
@@ -22,10 +22,10 @@
 
 **收益目标账（2026-09-08 与用户对齐）**：目标费后年化 ≥50%。已实测的暴露地图：现货多头域（无融券）最优 band +8.8%/Sharpe 0.46、等权基准 +10%/0.56——**现货多头域距 50% 很远且无 alpha**；钱在负向端（结论11/12），无融券时唯一合法收割=**仓位择时（涨多了降仓）+ 事件减法**。路径：①信号做深（弹药+WFO+L4 挖掘）②结构做对（择时/减法/未来合规做空工具）③可加杠杆的前提是 Sharpe 高（50%≈Sharpe2+×2x 杠杆，另一条腿是期货/两融授信，属资金面）。
 
-1. **仓位择时战役（新，50% 目标下现货域的主要矛盾）**：用市场级信号（微票拥挤度=D9 组放量度、全市场换手、涨跌家数）做"降仓开关"，在 band 组合上叠择时层（backtest 支持现金仓位），验收=费后年化与回撤双改善 + WFO
-2. **三强弹药 WFO 重验收**（滚动窗口 + 绝对收益/回撤口径，基准沪深300/中证500）；`fin_cash_quality`（结论15 新候选）与三强做相关审计后试小池合成（正交原料）
-3. **人肉挖掘彩排（正在进行）**：契约层五环节已串通（compile→eval→factorlib→sentinel），已产首猎 a_rev_x_lowvol（ICIR +0.70 待组合终裁）；继续 3~5 轮沉淀假设器 Prompt 模板与拒收规则；backtest --json 为彩排补齐中
-4. L4 实装（LangGraph 首选，见 PROJECT.md 选型结论）；择机：2005~2019 回填、signals/ 层、股指期货/两融等杠杆与做空工具的合规可行性调研
+1. **精选度战役（预注册）**：a_rev_x_lowvol 在 k=10/20/30 一次扫完、一次判决（Top-3 探索性 +18% 已消费不作数）——决定产品二"每日荐几只"形态；同场补做仓位择时层（市场级信号降仓开关，验收=费后年化与回撤双改善+WFO）
+2. **L4 换假设器**：本地 Qwen 探枪（function-calling/结构化输出质量实测）→ 过关则 PROPOSE.md 直接当系统提示词上岗；随后壳试用（dsh headless 或 LangGraph）跑一夜无人值守，七形态对策表逐项验收
+3. **轮换扩池**：WFO 选枪证明同族二换一增益仅 +0.03——轮换要值钱必须扩异族池（fin_cash_quality 正交原料、择时信号、后续挖掘产出）
+4. 择机：2005~2019 回填、signals/ 层、股指期货/两融等合规做空与杠杆工具可行性调研
 
 ## 四、术语人话对照（用户读文档遇到生词查这里；汇报一律用大白话）
 
@@ -65,4 +65,6 @@ conda run -n jaycode python -m research.fetch <task> --start ... --end ... # 取
 conda run -n jaycode python -m research.alpha compile --name a_x --expr "rank(-r_20d)"  # DSL 编译
 conda run -n jaycode python -m research.factorlib list|show <n>|add|set-status|record-eval|exprs
 conda run -n jaycode python -m research.sentinel         # 在库因子健康复测（--apply 自动退役）
+conda run -n jaycode python -m research.wfo years <因子> --reverse   # 逐年成绩（滚动验证）
+conda run -n jaycode python -m research.wfo rotate a:rev b:rev       # 滚动年度选枪
 ```

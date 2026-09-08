@@ -28,6 +28,7 @@ from research.eval import SPLIT      # IS/OOS 切点与 eval 统一
 REBAL_DAYS = 5      # 调仓周期（交易日），与 fwd_ret_5 视野一致
 FEE = 0.0013        # 双边近似：佣金万2.5×2 + 卖出印花税 0.05%（2023-08 后）+ 滑点万5
 BORROW = 0.08       # 纸面对冲的融券成本（年化，从厚假设；实际 A股融券更难更贵）
+RET_PATH = None     # 设置后 run() 导出日收益曲线 parquet（wfo.py 驱动用）
 
 
 def load_pivots(with_industry: bool = False
@@ -182,6 +183,10 @@ def run(col: str, k: int, rebal: int, reverse: bool = False,
            "fees_pct": fees / 1e8, "n_orders": len(pf.orders),
            "ann_mkt": float(ann_m), "ann_ex": ann_ex, "te": te,
            "ir": ir, "beta": beta, "corr": corr}
+    # 日收益曲线导出（逐年 WFO 驱动 wfo.py 用）
+    if RET_PATH:
+        pd.DataFrame({"ret": ret, "mkt": r_mkt.reindex(ret.index)}
+                     ).to_parquet(RET_PATH)
     split = pd.Timestamp(SPLIT)
     for seg, r, e in (("IS", ret[ret.index < split], ex[ex.index < split]),
                       ("OOS", ret[ret.index >= split], ex[ex.index >= split])):
@@ -273,7 +278,11 @@ if __name__ == "__main__":
                     help="名次分位逐股滚动均值天数（压换手，0=关）")
     ap.add_argument("--json", action="store_true", dest="as_json",
                     help="机器可读单行 JSON 输出（L4 工具契约）")
+    ap.add_argument("--ret-path", default=None,
+                    help="导出日收益曲线到该 parquet（wfo 驱动用）")
     a = ap.parse_args()
+    if a.ret_path:
+        RET_PATH = a.ret_path    # 模块级代码，直接赋值即可
     FEATURE_COLS.append(a.factor)
     bd = tuple(float(x) for x in a.band.split(",")) if a.band else None
     res = run(a.factor, a.k, a.rebal, a.reverse, buffer=a.buffer, band=bd,

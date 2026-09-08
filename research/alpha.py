@@ -33,6 +33,7 @@ import pandas as pd
 from research.config import derived_dir
 
 MAX_WINDOW = 250          # 时序窗口上限（交易日）
+LABEL_PREFIX = "fwd_"     # 未来收益标签列前缀：严禁作因子输入（未来函数）
 
 
 def alpha_dir():
@@ -46,6 +47,12 @@ def wide_path():
 def wide_columns() -> list[str]:
     import pyarrow.parquet as pq
     return list(pq.ParquetFile(wide_path()).schema_arrow.names)
+
+
+def feature_columns() -> list[str]:
+    """允许进入表达式白名单的列：宽表列去掉 date/code 与一切 fwd_* 标签列。"""
+    return [c for c in wide_columns()
+            if c not in ("date", "code") and not c.startswith(LABEL_PREFIX)]
 
 
 # ---------------- 算子（输入为宽表透视：index=date, columns=code） ----------------
@@ -194,7 +201,7 @@ def compile_expr(name: str, expr: str) -> pd.DataFrame:
         tree = ast.parse(expr, mode="eval")
     except SyntaxError as e:
         raise CompileError(f"语法错误: {e}") from None
-    cols = set(wide_columns())
+    cols = set(feature_columns())
     used: set[str] = set()
     _validate(tree, cols, used)
     mat = _eval(tree, _Ctx(used))
@@ -218,8 +225,10 @@ def main() -> None:
     a = ap.parse_args()
 
     if a.cmd == "list-cols":
-        print(json.dumps({"columns": wide_columns(), "ops": sorted(_OPS),
-                          "max_window": MAX_WINDOW},
+        print(json.dumps({"columns": feature_columns(), "ops": sorted(_OPS),
+                          "max_window": MAX_WINDOW,
+                          "banned": [c for c in wide_columns()
+                                     if c not in feature_columns()]},
                          ensure_ascii=False))
         return
 

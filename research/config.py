@@ -34,6 +34,28 @@ def derived_dir(*parts: str) -> Path:
     return d
 
 
+def llm_conf() -> tuple[str, str, str]:
+    """LLM 端点配置 (base_url, api_key, model)：环境变量优先，缺项回退 .env。
+
+    键名：LLM_BASE_URL / LLM_API_KEY / LLM_MODEL（R1：配置集中在 .env，不硬编码）。
+    """
+    import os
+
+    keys = ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL")
+    vals = {k: os.environ.get(k, "") for k in keys}
+    env_p = PROJECT_ROOT / ".env"
+    if env_p.exists() and not all(vals.values()):
+        for line in env_p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                if k in vals and not vals[k]:
+                    vals[k] = v.strip()
+    if not all(vals.values()):
+        raise SystemExit("LLM 端点未配置：请在 .env 填 " + " / ".join(keys))
+    return vals["LLM_BASE_URL"], vals["LLM_API_KEY"], vals["LLM_MODEL"]
+
+
 def jqcli_bin() -> Path:
     """jqcli 可执行文件路径。
 

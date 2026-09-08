@@ -14,7 +14,7 @@
 - **官方答案库**：`data/raw/jq/alpha_ref/` 33 片全历史 alpha101；`derived/alpha_board.csv` 87 因子同口径榜单（auc 入全场 Top12；官方头部=正向结构类，与自家负向量能类互补）
 - **裁判体系**：eval.py（IC/ICIR/分层，秒级）+ backtest.py（vectorbt 组合层，自证与手算误差 2e-16）；对答案获官方盖章（alpha_002/006 Pearson 0.999+）
 - **更新机制**：`python -m research.update --deep` 一键补到最新（断点续跑=更新，实战验证 4 次）；通道独占锁防并发
-- **弹药库**：**首个 product = `a_rev_x_lowvol`**（反转×低波交互，band 含费全区间 Sharpe 0.65）；候选 a_quiet_two/v_amt/auc/vlm/fin_cash_quality/bb_yest；教训档 a_cold_horse（IC 最强≠组合）。机器账本 `factorlib list`，人读 FACTORS.md
+- **弹药库**：**首个 product = `a_rev_x_lowvol`**（反转×低波交互，WFO 6/7 坐实；**持仓形态定档 Top-10、10 日调仓**，含费全区间 +13.8%/0.66）；候选 a_quiet_two/v_amt/auc/vlm/fin_cash_quality/bb_yest；教训档 a_cold_horse（IC 最强≠组合）。机器账本 `factorlib list`，人读 FACTORS.md
 - **彩排规范**：`research/PROPOSE.md`（作业五步流程+7 条拒收规则+7 条有效模式+L4 Prompt 骨架）——三轮彩排沉淀，LLM 假设器的母本
 - **L4 工具契约层（2026-09-08 建成，全流程串通实测）**：`alpha.py` 白名单 DSL 编译器（LLM 产出唯一入口，注入攻击全拦）→ `eval --json`（裁判机器可读，自动加载 alpha 产物）→ `factorlib.py`（机器账本 `derived/factorlib.json`：状态机 candidate→product→retired/rejected + 去重 `exprs`）→ `sentinel.py`（在库因子近 250 日复算，翻转判死/衰减判伤，首跑 6 因子全绿）。契约=命令行参数入、JSON 出、错误非零退出，任何壳（dsh/LangGraph）可按同一契约指挥
 
@@ -22,7 +22,7 @@
 
 **收益目标账（2026-09-08 与用户对齐）**：目标费后年化 ≥50%。已实测的暴露地图：现货多头域（无融券）最优 band +8.8%/Sharpe 0.46、等权基准 +10%/0.56——**现货多头域距 50% 很远且无 alpha**；钱在负向端（结论11/12），无融券时唯一合法收割=**仓位择时（涨多了降仓）+ 事件减法**。路径：①信号做深（弹药+WFO+L4 挖掘）②结构做对（择时/减法/未来合规做空工具）③可加杠杆的前提是 Sharpe 高（50%≈Sharpe2+×2x 杠杆，另一条腿是期货/两融授信，属资金面）。
 
-1. **精选度战役（预注册）**：a_rev_x_lowvol 在 k=10/20/30 一次扫完、一次判决（Top-3 探索性 +18% 已消费不作数）——决定产品二"每日荐几只"形态；同场补做仓位择时层（市场级信号降仓开关，验收=费后年化与回撤双改善+WFO）
+1. ~~精选度战役~~ ✅ **2026-09-08 判决（结论19）**：预注册 k∈{5,10,20} 仅按 IS 选优 → **k=10 当选**（IS 0.79），补 WFO 严考 6/7 过、最佳单年贡献 27% → **产品二形态定档：Top-10、每 10 交易日调仓**（全区间 +13.8%/0.66）。集中度代价如实记：2026 段 -9.4%、费用 70.7%。**遗留：仓位择时层未做**（降仓开关，验收=费后年化与回撤双改善+WFO）——独立成役
 2. **L4 换假设器**：本地 Qwen 探枪（function-calling/结构化输出质量实测）→ 过关则 PROPOSE.md 直接当系统提示词上岗；随后壳试用（dsh headless 或 LangGraph）跑一夜无人值守，七形态对策表逐项验收
 3. **轮换扩池**：WFO 选枪证明同族二换一增益仅 +0.03——轮换要值钱必须扩异族池（fin_cash_quality 正交原料、择时信号、后续挖掘产出）
 4. 择机：2005~2019 回填、signals/ 层、股指期货/两融等合规做空与杠杆工具可行性调研

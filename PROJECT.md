@@ -139,9 +139,12 @@ L4 挖掘层    LLM 假设器（白名单 pandas 表达式）← 失败案例回
 | `fetch.py` | 取数任务：`calendar` / `probe` / `daily` / `auction` / `valuation` / `money_flow` / `industry` / `concept` / `finance` / `mtss` / `billboard` / `st`，断点续跑 + 落盘覆盖核对 |
 | `build.py` | **L2 特征层**：raw → `derived/features.parquet`（26 列：动量/量能/估值/资金流/竞价失衡/两融占比/龙虎榜/ST + `fwd_ret_5` 标签；停牌与估值 NaN 不填充；两融 T+1 滞后、龙虎榜次日生效）+ `industry/concept/finance.parquet` 维表；幂等可重建 |
 | `check.py` | **数据体检门**：完整性/日历对齐/跨数据集主键与语义校验 + 交易规则对抗审计（时变涨跌停交易所口径、价格带、额量价、资金流守恒）+ 增强件 join 率与自洽校验；每次增量取数后必跑 |
-| `eval.py` | **L3 评估裁判**：截面 IC/RankIC/ICIR/正率 + 五分层多空价差 + 行业中性（日×行业中位去均值）+ IS/OOS 双段（2024-01-01 切）；内建可交易性过滤（剔停牌/ST/涨停触板）与截面厚度门 |
+| `eval.py` | **L3 评估裁判**：截面 IC/RankIC/ICIR/正率 + 五分层多空价差 + 行业中性（日×行业中位去均值）+ IS/OOS 双段（2024-01-01 切）；内建可交易性过滤（剔停牌/ST/涨停触板）与截面厚度门；`--json` 机器可读输出（L4 契约）；因子列可来自宽表或 alpha 产物（按名自动 join） |
 | `backtest.py` | **L3 组合级回测（vectorbt）**：`from_orders(targetpercent, cash_sharing)` 单组合 Top-K 轮动、可调调仓周期（默认 5 日）、双边费率 0.13%、净值用后复权；支持 `--reverse` 选方向；输出年化/回撤/Sharpe/Calmar/费用占比/日均持仓 + 全市场等权基准 + IS-OOS 分段 |
 | `fetch_alpha.py` | 官方 alpha101 基线取数（`jqfactor.get_all_alpha_values`，每 5 交易日采样，= "对答案"标准答案库） |
+| `alpha.py` | **L4 表达式编译器**（工具契约层）：白名单 DSL（列名 + 算术 + rank 截面 + delay/delta/ts_* 时序 + log/abs/sign）经 AST 校验后执行——LLM 产出物唯一的入口，杜绝任意代码执行与未来函数；产物 `derived/alpha/<name>.parquet`（date/code/value），与宽表列同契约进 eval |
+| `factorlib.py` | **私有因子库机器账本**（`derived/factorlib.json`）：档案（表达式/假设/eval 摘要/组合成绩/状态）+ 状态机（candidate→product→retired/rejected，非法流转拒绝）+ 去重索引（exprs 子命令供假设器查重）；FACTORS.md 是它的人读镜像 |
+| `sentinel.py` | **淘汰哨兵**：在库 candidate/product 因子用最近 250 交易日复算中性 RankIC/ICIR，方向翻转判 die、强度跌破地板判 decay，`--apply` 自动退役并记录原因；有事非零退出供上层感知 |
 
 评估（`factor_eval`）、因子库（`factor_lib`）、挖掘（`factor_miner`）、LLM 客户端（`llm_client`）等模块属于后续阶段，已在 git `42fc087` 保留，待特征底座成型后按需重写，不提前搬回。
 
@@ -191,9 +194,15 @@ conda run -n jaycode python -m research.check                                   
 3. **新鲜考卷由时间生产**：每日 update 落盘后，最新一段数据天然是所有历史决策的样本外——update 机制是本协议的基础设施；
 4. LLM 挖掘时代沿用 L4 七形态表 #3：裁判对挖掘端只暴露当前 IS 窗口，验收窗口封存。
 
- ### L4 框架选型初步结论（2026-09-07 调研，定案等彩排）
+ ### L4 框架选型初步结论（2026-09-07 调研 + 09-08 deepseek-harness 补充，定案等彩排）
 
-2026 年 Agent 框架竞争焦点已收敛到**状态治理/故障恢复/可观测**——恰是七形态表 #6/#7（成本失控、静默卡死）的解药，与本项目需求精确对位。硬约束过滤：本地 Qwen（OpenAI 兼容）+ R4-8 零外泄 → 云端 tracing（LangSmith 云）与云绑定框架（ADK/Bedrock）出局；AutoGen 官方已入维护模式，新项目排除；CrewAI/smolagents 偏"角色链/代码生成"自主范式，与我们"流程代码写死、只在假设器节点调 LLM"的确定性闭环不匹配。**首选 = LangGraph 开源版**（有向状态图 + checkpoint 本地落盘续跑 = 断点续跑哲学同源 + human-in-the-loop + 条件路由用代码不靠 LLM）。**但暂不定案**：框架是重承诺，闭环形状（节点/状态 schema/路由条件）要先靠"人肉彩排"跑实，届时把彩排沉淀的 `propose→compile→judge→memorize` 函数图化即迁移完成。实装前补验一枪：本地 Qwen 的 function-calling 质量（不行则用结构化输出+解析兜底，LangGraph 不强制 tool-calling）。
+2026 年 Agent 框架竞争焦点已收敛到**状态治理/故障恢复/可观测**——恰是七形态表 #6/#7（成本失控、静默卡死）的解药，与本项目需求精确对位。硬约束过滤：本地 Qwen（OpenAI 兼容）+ R4-8 零外泄 → 云端 tracing（LangSmith 云）与云绑定框架（ADK/Bedrock）出局；AutoGen 官方已入维护模式，新项目排除；CrewAI/smolagents 偏"角色链/代码生成"自主范式，与我们"流程代码写死、只在假设器节点调 LLM"的确定性闭环不匹配。
+
+**deepseek-harness（dsh，2026-08 开源）**"一切皆插件"对本项目的正确读法：**能力活在插件里，壳会换代、工具插件才是资产**。其 headless 模式（一条命令跑完退出）、追加式全量留痕（可回放/检索，对 #7）、workspace-write 权限锁（对 R4-8）三点与我方需求精确对口；但官方明示开发者预览版将有 breaking changes 且为 Node/TS 栈——**当实验台试用，主线不押上**。
+
+**分层定案（资产/壳分离）**：
+- **资产层（已建成，2026-09-08 工具契约层）**：`alpha.py`（白名单 DSL 编译器=LLM 产出唯一入口）+ `eval --json`（裁判机器可读）+ `factorlib.json`（记忆/状态机/去重）+ `sentinel.py`（淘汰）+ update/build/check（数据底座）——统一命令行契约（参数入、JSON 出、错误非零退出），任何壳都按同一契约调用。
+- **壳层（可替换）**：候选 = LangGraph（Python 原生 checkpoint）与 dsh（headless/留痕）；先用"人肉彩排"把 `propose→compile→judge→memorize` 函数跑实，再把函数图化挂壳；实装前补验本地 Qwen function-calling 质量。
 
 **下一步**
 0. ~~财务特征首测~~ ✅ **2026-09-08 判决（结论15）**：cash_quality 入候选（neu ICIR 0.289 稳定），财务面整体弱——主战场仍在量价/事件
@@ -233,6 +242,8 @@ conda run -n jaycode python -m research.check                                   
 15. **财务面首测判决（2026-09-08，9 个 fin_ 特征过 eval，样本 734 万行）**：①**财务面整体比量价面弱一个量级**——最优 ICIR 0.29 vs 量价系 0.5+；2020~2026 A股是微票量价主导市，基本面普遍被压制。②**唯一稳定新信号=`fin_cash_quality`（经营现金流/净利，正向）**：full/neu ICIR +0.289、IS +0.197/OOS/neu +0.211 同号不衰减、pos% 0.62 全场最高、行业中性后增强——"现金为王"在 A 股截面成立，入候选。③`fin_np_yoy` 边缘信号（IS +0.072/OOS +0.132 同号、量级小）。④**教科书因子 ROE 直接失效**（IC -0.0008，IS/OOS 方向翻转）——教科书异象清单在 A 股这段再减一员，呼应"因子方向随窗口翻转"铁律。⑤含义：**财务面不是主战场**（补它的价值=正交原料+风控过滤，如剔除现金流恶化票），50% 年化的指望不能押在它身上。
 
 16. **数据事故复盘：盘中快照当收盘（2026-09-08，用户指出）**：09-07 update 在 10:54 执行，daily/auction/billboard/st 把"当时正在进行"的 09-07 当收盘落盘——取证：close 86% 票不符终值（最大偏差 12%）、成交额仅终值一半（1.09 vs 1.95 万亿）、billboard 整天缺失（未公布被抓成空片，断点续跑按文件名跳过=**静默永久缺口**）。auction/st 无损（竞价 9:25 定盘、ST 盘前已知）。**关键教训：这类错误在文件内部完全自洽，体检门与外部硬规矩全过——数据校验的盲区是"时间维度"（齐、对，但没"完"），只能靠取数时点纪律防**。修复：拆旧片剔脏行、重取收盘终值、补龙虎榜、update.py 三档节奏+`CLOSE_HOUR=20` 收盘门槛（白天 daily/billboard 自动止于 T-1），规则入 rules 第 7 条"未收盘的数据不是数据"。
+
+17. **人肉彩排三轮战报（2026-09-09，工具契约层全流程：propose→compile→eval→backtest→factorlib）**：产出 **第一个 product 级因子 `a_rev_x_lowvol`**（`rank(-r_20d)*rank(-v_std_20)`，band 多头含费全区间 Sharpe 0.65 > v_amt 0.46，IS 预注册过线→OOS 一次性 0.68）+ 候选 a_quiet_two（0.60，同族待 WFO 二选一）+ 拒收 a_cold_horse（IC 全场最强档但 IS 组合 0.32 即拒，OOS 未看）。**三条硬认知**（全部进 PROPOSE.md 回喂）：①**IC 是排序证据，组合是暴露证据**——"最强×最强"交互 IC 最高、组合最差（放大共同微票暴露，贝塔 1.12）；"两弱腿"交互反赢因交互把暴露结构修正归一（贝塔 0.96）；②**回测方向必须与 eval IS/neu IC 符号强制联动**（第 2 轮方向选反 IS -11.8% 差点错杀好假设，正确性修复≠调参的例外条款由此立，同结论12③）；③**预注册判决流程机器化跑通**：事前定线（IS Sharpe≥现役基线 0.46）→IS 判→过线才放 OOS 看一次，三轮零违规。
 
 > 工程纪律与踩坑教训已固化到 `.trae/rules/rules.md` 第 5 节，本文件不再重复。
 

@@ -15,9 +15,16 @@ PIT 与口径纪律：
 用法：
     conda run -n jaycode python -m research.eval                 # 跑默认基线因子集
     conda run -n jaycode python -m research.eval v_amt_5_20 ...  # 指定因子
+    conda run -n jaycode python -m research.eval --json a_xxx    # 机器可读（L4 工具契约）
+
+    因子列可来自宽表，也可来自 alpha 编译器产物（derived/alpha/<name>.parquet，
+    按名字自动加载并 join）。--json 时每因子输出一行 JSON，NaN 转 null。
 """
 
 from __future__ import annotations
+
+import json
+import math
 
 import numpy as np
 import pandas as pd
@@ -92,6 +99,8 @@ def evaluate(f: pd.DataFrame, col: str) -> dict:
     """一个因子的完整体检：全样本 / IS / OOS × 原始 / 行业中性。"""
     res = {}
     for seg, sub in _segments(f):
+        if sub.empty:
+            continue          # 空段（如短窗口无 IS 样本）直接跳过
         for tag, series in (("raw", sub[col]), ("neu", neutralize(sub, col))):
             s = sub.assign(_x=series)
             st = _cs_stats(s, "_x")
@@ -116,22 +125,55 @@ def _segments(f: pd.DataFrame):
                    + pd.Timedelta(days=7)]   # 标签空隙（5 交易日≈7 自然日）
 
 
+def _attach(f: pd.DataFrame, col: str) -> pd.DataFrame:
+    """请求的列不在宽表时，尝试从 alpha 编译器产物加载（date/code/value 长表）。"""
+    if col in f.columns:
+        return f
+    p = derived_dir("alpha") / f"{col}.parquet"
+    if not p.exists():
+        return f
+    a = pd.read_parquet(p).rename(columns={"value": col})
+    return f.merge(a[["date", "code", col]], on=["date", "code"], how="left")
+
+
+def _jsonable(v):
+    if isinstance(v, float) and math.isnan(v):
+        return None
+    return v
+
+
 def main() -> None:
     import sys
 
-    cols = sys.argv[1:] or BASELINE
+    args = sys.argv[1:]
+    as_json = "--json" in args
+    cols = [x for x in args if x != "--json"] or BASELINE
     f, _ = load()
-    print(f"评估样本: {len(f)} 行, {f['dt'].nunique()} 天, "
-          f"切点 IS<{SPLIT}<=OOS, 截面下限 {MIN_CS}")
-    hdr = f"{'因子':18s} {'段/中性':9s} {'RankIC':>8s} {'ICIR':>7s} " \
-          f"{'pos%':>6s} {'LS(bp)':>8s} {'天数':>5s}"
-    print(hdr)
-    print("-" * len(hdr))
+    if not as_json:
+        print(f"评估样本: {len(f)} 行, {f['dt'].nunique()} 天, "
+              f"切点 IS<{SPLIT}<=OOS, 截面下限 {MIN_CS}")
+        hdr = f"{'因子':18s} {'段/中性':9s} {'RankIC':>8s} {'ICIR':>7s} " \
+              f"{'pos%':>6s} {'LS(bp)':>8s} {'天数':>5s}"
+        print(hdr)
+        print("-" * len(hdr))
     for c in cols:
+        f = _attach(f, c)
         if c not in f.columns:
-            print(f"{c}: 宽表中不存在，跳过")
+            if as_json:
+                print(json.dumps({"ok": False, "factor": c,
+                                  "error": "宽表与 alpha 产物中均不存在"},
+                                 ensure_ascii=False))
+            else:
+                print(f"{c}: 宽表中不存在，跳过")
             continue
         r = evaluate(f, c)
+        if as_json:
+            out = {"ok": True, "factor": c, "label": LABEL,
+                   "split": SPLIT,
+                   "segments": {k: {kk: _jsonable(vv) for kk, vv in v.items()}
+                                for k, v in r.items()}}
+            print(json.dumps(out, ensure_ascii=False))
+            continue
         for seg in ("full/raw", "full/neu", "IS/raw", "OOS/raw", "OOS/neu"):
             if seg not in r:
                 continue

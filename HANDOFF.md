@@ -2,7 +2,7 @@
 
 > 用途：任何新会话恢复任务的唯一入口。PROJECT.md 是现状全貌，本文件是"现在在哪、下一步打什么、怎么打"。
 > 维护纪律：每场战役结束/路线改判/重大发现时更新本文件（与 PROJECT.md 同步），随代码一起提交。
-> 最后更新：2026-09-08（09-07 盘中快照事故修复+收盘门槛机制化；财务面首测判决，结论15）
+> 最后更新：2026-09-09（人肉彩排三轮完成：第一个 product 因子 a_rev_x_lowvol 诞生；PROPOSE.md 作业规范成文）
 
 ## 一、我们在做什么（30 秒版）
 
@@ -14,7 +14,9 @@
 - **官方答案库**：`data/raw/jq/alpha_ref/` 33 片全历史 alpha101；`derived/alpha_board.csv` 87 因子同口径榜单（auc 入全场 Top12；官方头部=正向结构类，与自家负向量能类互补）
 - **裁判体系**：eval.py（IC/ICIR/分层，秒级）+ backtest.py（vectorbt 组合层，自证与手算误差 2e-16）；对答案获官方盖章（alpha_002/006 Pearson 0.999+）
 - **更新机制**：`python -m research.update --deep` 一键补到最新（断点续跑=更新，实战验证 4 次）；通道独占锁防并发
-- **弹药库**：见 FACTORS.md——候选三强（v_amt_5_20 / auc_money_share / vlm_turnover）+ 财务 9 特征刚进场（未测）
+- **弹药库**：**首个 product = `a_rev_x_lowvol`**（反转×低波交互，band 含费全区间 Sharpe 0.65）；候选 a_quiet_two/v_amt/auc/vlm/fin_cash_quality/bb_yest；教训档 a_cold_horse（IC 最强≠组合）。机器账本 `factorlib list`，人读 FACTORS.md
+- **彩排规范**：`research/PROPOSE.md`（作业五步流程+7 条拒收规则+7 条有效模式+L4 Prompt 骨架）——三轮彩排沉淀，LLM 假设器的母本
+- **L4 工具契约层（2026-09-08 建成，全流程串通实测）**：`alpha.py` 白名单 DSL 编译器（LLM 产出唯一入口，注入攻击全拦）→ `eval --json`（裁判机器可读，自动加载 alpha 产物）→ `factorlib.py`（机器账本 `derived/factorlib.json`：状态机 candidate→product→retired/rejected + 去重 `exprs`）→ `sentinel.py`（在库因子近 250 日复算，翻转判死/衰减判伤，首跑 6 因子全绿）。契约=命令行参数入、JSON 出、错误非零退出，任何壳（dsh/LangGraph）可按同一契约指挥
 
 ## 三、下一场战役（按序，别跳）
 
@@ -22,7 +24,7 @@
 
 1. **仓位择时战役（新，50% 目标下现货域的主要矛盾）**：用市场级信号（微票拥挤度=D9 组放量度、全市场换手、涨跌家数）做"降仓开关"，在 band 组合上叠择时层（backtest 支持现金仓位），验收=费后年化与回撤双改善 + WFO
 2. **三强弹药 WFO 重验收**（滚动窗口 + 绝对收益/回撤口径，基准沪深300/中证500）；`fin_cash_quality`（结论15 新候选）与三强做相关审计后试小池合成（正交原料）
-3. **人肉挖掘彩排**：按"假设→编译→裁判→记账(FACTORS.md)"走 3~5 轮，沉淀 Prompt/拒收规则；L4 自动化前必过 PROJECT.md 七形态对策表
+3. **人肉挖掘彩排（正在进行）**：契约层五环节已串通（compile→eval→factorlib→sentinel），已产首猎 a_rev_x_lowvol（ICIR +0.70 待组合终裁）；继续 3~5 轮沉淀假设器 Prompt 模板与拒收规则；backtest --json 为彩排补齐中
 4. L4 实装（LangGraph 首选，见 PROJECT.md 选型结论）；择机：2005~2019 回填、signals/ 层、股指期货/两融等杠杆与做空工具的合规可行性调研
 
 ## 四、术语人话对照（用户读文档遇到生词查这里；汇报一律用大白话）
@@ -57,7 +59,10 @@
 conda run -n jaycode python -m research.update --deep   # 每日更新（幂等，重跑=续传）
 conda run -n jaycode python -m research.check           # 体检门（含九节财务）
 conda run -n jaycode python -m research.build           # 重建 L2 宽表
-conda run -n jaycode python -m research.eval <因子...>  # IC 裁判
+conda run -n jaycode python -m research.eval <因子...>  # IC 裁判（--json 机器可读）
 conda run -n jaycode python -m research.backtest <因子> -k 100 --rebal 10  # 组合裁判
 conda run -n jaycode python -m research.fetch <task> --start ... --end ... # 取数（断点续跑）
+conda run -n jaycode python -m research.alpha compile --name a_x --expr "rank(-r_20d)"  # DSL 编译
+conda run -n jaycode python -m research.factorlib list|show <n>|add|set-status|record-eval|exprs
+conda run -n jaycode python -m research.sentinel         # 在库因子健康复测（--apply 自动退役）
 ```

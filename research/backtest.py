@@ -38,10 +38,22 @@ def load_pivots(with_industry: bool = False
     可交易性判断用真实价 close vs high_limit（涨跌停仅此口径有意义）。
     with_industry=True 时特征长表附加 sw_l1（季末快照 as-of，与 eval 同语义）。
     """
-    f = pd.read_parquet(
-        derived_dir() / "features.parquet",
-        columns=["date", "code", "close", "post_close", "paused", "st_flag",
-                 "high_limit"] + FEATURE_COLS)
+    import pyarrow.parquet as pq
+    wide_cols = set(pq.ParquetFile(derived_dir() / "features.parquet")
+                    .schema_arrow.names)
+    base = ["date", "code", "close", "post_close", "paused", "st_flag",
+            "high_limit"]
+    wcols = [c for c in FEATURE_COLS if c in wide_cols]
+    acols = [c for c in FEATURE_COLS if c not in wide_cols]
+    f = pd.read_parquet(derived_dir() / "features.parquet",
+                        columns=base + wcols)
+    # 宽表没有的因子列 → 从 alpha 编译器产物加载（与 eval 同契约）
+    for c in acols:
+        p = derived_dir("alpha") / f"{c}.parquet"
+        if not p.exists():
+            raise SystemExit(f"因子 {c} 既不在宽表也无 alpha 产物（先 alpha compile）")
+        f = f.merge(pd.read_parquet(p).rename(columns={"value": c}),
+                    on=["date", "code"], how="left")
     f["date"] = pd.to_datetime(f["date"])   # 统一 datetime 轴（宽表里 date 是 str）
     price = f.pivot(index="date", columns="code", values="post_close")
     price = price.ffill().bfill()   # 停牌空窗沿用上收盘价（持仓净值连续），可交易性另由 tradable 控制
@@ -259,8 +271,17 @@ if __name__ == "__main__":
                     help="分位在日×行业内计算（行业中性选股）")
     ap.add_argument("--smooth", type=int, default=0,
                     help="名次分位逐股滚动均值天数（压换手，0=关）")
+    ap.add_argument("--json", action="store_true", dest="as_json",
+                    help="机器可读单行 JSON 输出（L4 工具契约）")
     a = ap.parse_args()
     FEATURE_COLS.append(a.factor)
     bd = tuple(float(x) for x in a.band.split(",")) if a.band else None
-    run(a.factor, a.k, a.rebal, a.reverse, buffer=a.buffer, band=bd,
-        neutral=a.neutral, smooth=a.smooth)
+    res = run(a.factor, a.k, a.rebal, a.reverse, buffer=a.buffer, band=bd,
+              neutral=a.neutral, smooth=a.smooth, quiet=a.as_json)
+    if a.as_json:
+        import json
+        print(json.dumps({"ok": True, "factor": a.factor, "k": a.k,
+                          "rebal": a.rebal, "reverse": a.reverse,
+                          "buffer": a.buffer, "band": list(bd) if bd else None,
+                          "neutral": a.neutral, "smooth": a.smooth,
+                          "fee": FEE, **res}, ensure_ascii=False))

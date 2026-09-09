@@ -74,5 +74,6 @@ conda run -n jaycode python -m research.sentinel         # 在库因子健康复
 conda run -n jaycode python -m research.wfo years <因子> --reverse   # 逐年成绩（滚动验证）
 conda run -n jaycode python -m research.wfo rotate a:rev b:rev       # 滚动年度选枪
 conda run -n jaycode python -m research.signals                     # 每日荐股 Top-10（含自动补编译滞后产物）
+bash research/dig_supervisor.sh &            # dig 监工（09-09 已挂 cron 每 30min 保活，状态看 data/derived/dig_supervisor.log）
 ```
 ```

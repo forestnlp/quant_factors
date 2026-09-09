@@ -14,7 +14,8 @@
          才把 T 日算进缺口**，否则止于 T-1——盘中抓 T 日=半日快照毁数据
          （09-07 事故：10:54 抓的快照 close 86% 票不符、成交额缺一半，
          且 billboard 未公布被静默成空片、断点续跑永久跳过）
-       - today 档（auction / st）：9:25 撮合完成/盘前已知，当日可更
+       - today 档（auction / st）：9:25 撮合完成/盘前已知，当日可更，
+         但须过 AUCTION_HOUR（早晨竞价还不存在，09-09 实测炸过）
        - t1 档（valuation / money_flow / mtss）：T+1 公布，止于上一交易日
     4) 过 check 体检门（--deep 加深度校验）→ 重建 L2 宽表
 
@@ -32,6 +33,8 @@ from research import build, check, fetch
 from research.config import raw_dir
 
 CLOSE_HOUR = 20    # 收盘数据可信时点：晚 8 点后 T 日量价/龙虎榜才是终值
+AUCTION_HOUR = 10  # 竞价可信时点：9:25 撮合完成，上午 10 点前 T 日竞价碰不得
+                   # （09-09 晨间实测：8:50 取当日 auction → 云端无产出直接炸）
 
 
 def _latest_local(name: str) -> str:
@@ -60,6 +63,8 @@ def _gap_end(mode: str, last_td: str, prev_td: str, now: datetime.datetime) -> s
     """按数据集节奏档算"允许补到的截止日"（盘中保护的核心判定）。"""
     if mode == "t1":
         return prev_td
+    if mode == "today" and now.hour < AUCTION_HOUR:
+        return prev_td          # 竞价 9:25 才撮合，早晨 T 日还不存在
     if mode == "close" and now.hour < CLOSE_HOUR:
         return prev_td          # 未过收盘可信时点，T 日数据碰不得
     return last_td

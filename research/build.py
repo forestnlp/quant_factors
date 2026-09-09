@@ -23,11 +23,21 @@ import pandas as pd
 from research.config import raw_dir, derived_dir
 
 
+_RAW_KEYS = {"date", "day", "code", "sec_code", "end_date"}
+
+
 def _load_raw(name: str) -> pd.DataFrame:
     files = sorted(glob.glob(str(raw_dir("jq", name) / "*.csv")))
     if not files:
         raise FileNotFoundError(f"raw/{name} 无数据，先跑 fetch {name}")
-    return pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    # 分片跨 pandas 版本：新版把纯文本列推断成 StringDtype、旧版是 object，
+    # 不同数据集混用时 merge 会因合并键 dtype 不一致而炸。只归并键列，
+    # 值列（如 pub_date 参与 max(axis=1)）保持原 dtype。
+    for c in _RAW_KEYS & set(df.columns):
+        if isinstance(df[c].dtype, pd.StringDtype):
+            df[c] = df[c].astype(object)
+    return df
 
 
 def _shift_merge(f: pd.DataFrame, col: str, years: int = 0,
@@ -192,7 +202,7 @@ def build_features() -> pd.DataFrame:
                 on=["date", "code"], how="left")
     imb_den = (d["auc_b1"] + d["auc_a1"]).replace(0, np.nan)
     d["auc_imb"] = (d["auc_b1"] - d["auc_a1"]) / imb_den      # 竞价买卖失衡
-    d["auc_money_share"] = d["auc_money"] / d["money"]         # 竞价额占全日比
+    d["auc_money_share"] = d["auc_money"] / d["money"].replace(0, np.nan)
 
     # 两融（T+1 晨间才公布 T 日余额 → 一律滞后一日使用，防未来函数）
     mt = _load_raw("mtss").drop_duplicates(subset=["date", "sec_code"])
@@ -228,6 +238,7 @@ def build_features() -> pd.DataFrame:
     # 财务三表 PIT 特征（生效日=该报告期三表 pub_date 的最大值，保守安全；
     # 累计口径→TTM；更正披露取首版；as-of backward 无 tolerance=最近已知值语义）
     fin = _fin_quarterly()
+    fin["code"] = fin["code"].astype(object)   # 财务路径内部字符串运算会重生 str dtype
     fin["eff_dt"] = pd.to_datetime(fin["eff"])
     d = pd.merge_asof(
         d.sort_values("date_dt").reset_index(drop=True),

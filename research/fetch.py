@@ -221,6 +221,53 @@ print("rows=%d codes=%d periods=%d size=%.1fMB" % (
     os.path.getsize(p) / 1048576.0))
 '''
 
+MIN_AGG_TMPL = '''# -*- coding: utf-8 -*-
+# 分钟→日频聚合（P1 风向标原料）：云端只算开盘窗口量能/价格，本地只收日频结果。
+# 探针实测：300 只 1m 全天 2s、可只取片段；返回上限有限 → 必须云端聚合后回传。
+# 三段时间窗（用户 2026-09-09 定）：3m=开盘抢跑、30m=定调、90m=前1.5h 成一天性质。
+# 只取 09:30~11:00（三窗全覆盖，全日量价本地日线已有）→ 流量与耗时减半。
+from jqdata import *
+import os
+import pandas as pd
+
+DAYS = {days!r}
+os.makedirs("jq_out", exist_ok=True)
+WIN = {{"3": "09:33", "30": "10:00", "90": "11:00"}}
+parts = []
+for d in DAYS:
+    codes = get_all_securities("stock", date=d).index.tolist()
+    seg = []
+    for i in range(0, len(codes), 500):        # 分钟行密：500 只/组稳（探针 300 只 2s）
+        m = get_price(codes[i:i + 500], start_date=d + " 09:30:00",
+                      end_date=d + " 11:00:00", frequency="1m",
+                      fields=["open", "close", "high", "volume"],
+                      panel=False, skip_paused=True)
+        if len(m):
+            seg.append(m)
+    if not seg:
+        continue
+    m = pd.concat(seg, ignore_index=True)
+    m["hhmm"] = pd.to_datetime(m["time"]).dt.strftime("%H:%M")
+    rows = []
+    for c, g in m.groupby("code"):
+        t = g["hhmm"]
+        row = dict(day=d, code=c, o=float(g["open"].iloc[0]))
+        for key, cut in WIN.items():
+            w = g[t <= cut]
+            row["v" + key] = float(w["volume"].sum()) if len(w) else 0.0
+            row["c" + key] = float(w["close"].iloc[-1]) if len(w) else float("nan")
+            row["h" + key] = float(w["high"].max()) if len(w) else float("nan")
+        rows.append(row)
+    parts.append(pd.DataFrame(rows))
+df = pd.concat(parts, ignore_index=True)
+df["day"] = df["day"].astype(str).str[:10]
+p = os.path.join("jq_out", "{fname}")
+df.to_csv(p, index=False)
+print("rows=%d codes=%d days=%d size=%.1fMB" % (
+    len(df), df["code"].nunique(), df["day"].nunique(),
+    os.path.getsize(p) / 1048576.0))
+'''
+
 MTSS_TMPL = '''# -*- coding: utf-8 -*-
 # 融资融券（两融标的约 4000 只/日，直接按日分片全市场）
 from jqdata import *
@@ -588,6 +635,15 @@ def fetch_mtss(start: str, end: str, chunk_days: int = 30,
                   raw_dir("jq", "mtss"), force)
 
 
+def fetch_min_agg(start: str, end: str, chunk_days: int = 1,
+                  force: bool = False) -> None:
+    """分钟→日频聚合（P1 风向标）→ data/raw/jq/min_agg/
+    云端算开盘窗口(3m/30m/90m)量价、本地只收日频；1m 全市场单日约 40s（探针折算），
+    故逐日一片（远端上限 600s 内最稳，断点续跑粒度也最小）。"""
+    _fetch_series("min_agg", MIN_AGG_TMPL, start, end, chunk_days,
+                  raw_dir("jq", "min_agg"), force)
+
+
 def fetch_billboard(start: str, end: str, chunk_days: int = 60,
                     force: bool = False) -> None:
     """龙虎榜 → data/raw/jq/billboard/"""
@@ -608,7 +664,7 @@ def main() -> None:
                                      "valuation", "money_flow", "industry",
                                      "concept", "finance", "finance_bs",
                                      "finance_cf", "mtss", "billboard",
-                                     "st"])
+                                     "st", "min_agg"])
     ap.add_argument("--start", default="2025-01-04",
                     help="起始日期（industry/concept/finance 任务传年份如 2025）；"
                          "聚宽行情起点为 2005-01-04（官方文档+实测）")
@@ -644,6 +700,8 @@ def main() -> None:
         fetch_billboard(a.start, a.end, a.chunk_days or 60, a.force)
     elif a.task == "st":
         fetch_st(a.start, a.end, a.chunk_days or 250, a.force)
+    elif a.task == "min_agg":
+        fetch_min_agg(a.start, a.end, a.chunk_days or 1, a.force)
     else:
         fetch_auction(a.start, a.end, a.chunk_days or 10, a.force)
 

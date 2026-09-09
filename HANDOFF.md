@@ -28,9 +28,9 @@
 4. ~~轮换扩池~~ ❌ **2026-09-09 判死（结论22）**：三族池轮换 0.55 < 池内最优 0.65，6 次换枪错 3 次——**问题在机制不在池**（按上年 Sharpe 选枪=追噪声）。增益改走"**多因子等权合成**"（下条 P0）
 5. ~~P0 合成战役~~ ❌ **2026-09-09 判决 FAIL（结论24）**：预注册线 IS Sharpe>0.632 且 WFO 正年≥6/7 → 实测 **IS 0.611 不过线**（WFO 6/7 达标不作抵赖）。合成枪全区间 +11.5%/0.63 < 现役 +12.6%/0.65。**与轮换同根结论：池子同质化未解决前，组合花样零增值**——增益只能来自真正不同的信号源（P1）。synth.py 留作工具，a_synth_f4 不荐股。同日两枪转正 **product**：a_retail_chase_quiet、a_quality_quiet（用户批准）；本批 6 新候选 WFO 全员过线（4/7~6/7，全区间 0.47~0.53）仍为 candidate
 6. ~~P1 分钟→日频特征~~ ❌ **2026-09-09 试点终判 FAIL（结论26，两周期全灭+OOS 已消费）**：管道全通（fetch min_agg 云端聚合 51s/日 + build_min 七特征），5 抽月 93 片取数完成。5 日标签：唯一 IS 过线 m_pull30 → OOS 2026-06 ICIR -0.060 反号 FAIL；1 日标签公正复检亦全灭（m_pull30 差 0.06 压线）。**风向标（m_lead30）证伪、开盘价格特征无信号、抢跑惩罚仅 2020-22 稳（2023 翻转）**。留下资产：min_agg 原料底座+全链路管道（日内策略/全期回填随时可启用）。**教训：验证前先核对标签周期与假设周期匹配**（勿再犯）。分钟域若再战=日内策略形态（持仓<1日），需新预注册，暂不排期
-7. P2 择机（用户 2026-09-09 明确放后）：2005~2019 回填、signals/ 层、合规做空/杠杆工具调研
+7. **signals/ 层已建成（2026-09-09 晚）**：`python -m research.signals` 输出当日应持 Top-10/买卖动作（选股直调 backtest.topk_weights 同一实现，08-25 独立复算逐票一致；持仓=数据纯函数无状态文件）。**顺手堵住系统性缺口**：alpha 产物是编译时快照、update 重建宽表后不自动跟新（实查 a_rev_x_lowvol 停 09-07）→ signals 内置 `_refresh_alpha`（产物截止<宽表截止→按账本表达式自动重编译）。执行口径诚实声明：回测按信号日收盘成交，实盘次日下单有约 1 日漂移，以实盘实测为准。执行节奏：数据截止日恰为调仓日（全局第 10n 交易日）才换仓，其余日维持
 8. P3 新闻/CCTV 情绪因子：**通道实测不通**（09-09 云端探针：研究环境无 get_cctv_news/get_news，属 JQData 商业版）；传导链最长，最低优先级
-9. **待用户确认**：WFO 全过的 2 个 candidate（a_retail_chase_quiet / a_quality_quiet）是否名义转正 product
+9. ~~待用户确认转正~~ ✅ 09-09 用户批准，a_retail_chase_quiet / a_quality_quiet 已转 product（账本+FACTORS 同步）
 10. **⚠️ 09-09 批量挖掘诚实警示（合成战役前必读）**：首批 17 轮过线 6 个，但**表达式全部含 mf_net_pct_main（主力净流入）**——同一味原料的家族簇，IS 多重检验风险高；去重门（秩相关>0.9）挡住了换皮但挡不住"同原料不同配方"。**合成前必须先给 6 个新候选跑 WFO，且合成权重按家族簇折减**（同簇视为一支枪）
 
 ## 四、术语人话对照（用户读文档遇到生词查这里；汇报一律用大白话）
@@ -73,5 +73,6 @@ conda run -n jaycode python -m research.factorlib list|show <n>|add|set-status|r
 conda run -n jaycode python -m research.sentinel         # 在库因子健康复测（--apply 自动退役）
 conda run -n jaycode python -m research.wfo years <因子> --reverse   # 逐年成绩（滚动验证）
 conda run -n jaycode python -m research.wfo rotate a:rev b:rev       # 滚动年度选枪
+conda run -n jaycode python -m research.signals                     # 每日荐股 Top-10（含自动补编译滞后产物）
 ```
 ```

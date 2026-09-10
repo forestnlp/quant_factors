@@ -90,7 +90,8 @@ def _quantiles(f: pd.DataFrame, col: str, n: int = 5) -> pd.Series:
     """五分层日均收益，返回各层均值（升序：Q1 最低 … Q5 最高）。"""
     sub = f[["dt", col, LABEL]].dropna()
     q = sub.groupby("dt")[col].transform(
-        lambda s: pd.qcut(s.rank(method="first"), n, labels=False))
+        lambda s: pd.qcut(s.rank(method="first"), n, labels=False,
+                          duplicates="drop"))  # 极端日有效值<n 时并层（2026-09-10 修：否则 qcut 崩整批）
     m = sub.assign(q=q).groupby("q")[LABEL].mean()
     return m
 

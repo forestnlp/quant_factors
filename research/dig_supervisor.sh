@@ -7,7 +7,9 @@
 set -u
 ROOT="/home/chinapost/users/jaycode/quant_factors"
 cd "$ROOT" || exit 1
-CONDA="/data/anaconda3/bin/conda"
+# 直连 env python（绕过 conda run 包装层：两次 rc=139 均为开批 1-2 秒、首行输出前即崩，
+# 高度指向 conda run 包装层段错误；去掉中间层后 rc 直接反映 python 本体）
+PYENV="/home/chinapost/.conda/envs/jaycode/bin/python"
 LOG="data/derived/dig_supervisor.log"
 LOCK="data/derived/dig_supervisor.lock"
 HB="data/derived/dig_log.jsonl"
@@ -18,6 +20,12 @@ MAXSLEEP=7200         # 故障退避上限（秒）
 
 exec 9>"$LOCK"
 flock -n 9 || exit 0   # 已有活监工，本实例退出
+
+# 教训 09-10：kill 监工时其 sleep 子进程会孤儿化并继承锁 fd → 新实例被 flock
+# 挡在门外"静默复活失败"。退避/冷却 sleep 一律后台化并登记，EXIT 时带走。
+SP=""
+trap '[ -n "$SP" ] && kill "$SP" 2>/dev/null' EXIT
+sp() { sleep "$1" & SP=$!; wait "$SP" 2>/dev/null; SP=""; }   # 可中断 sleep
 
 ts() { date '+%F %T'; }
 fail=0
@@ -33,7 +41,8 @@ while true; do
     sleep 60
   else
     echo "[$(ts)] 无挖掘进程 → 开新批 (rounds=20 patience=5)" >> "$LOG"
-    "$CONDA" run -n jaycode python -m research.dig run \
+    # faulthandler：段错误(rc=139)时把 Python 栈打进批日志（两次 139 均零输出即崩，须留证）
+    PYTHONFAULTHANDLER=1 "$PYENV" -m research.dig run \
       --rounds 20 --patience 5 >> "$BATCH_LOG" 2>&1
     rc=$?
     if [ "$rc" -eq 0 ]; then
@@ -45,7 +54,7 @@ while true; do
       wait_s=$(( COOLDOWN * 2**fail ))
       [ "$wait_s" -gt "$MAXSLEEP" ] && wait_s=$MAXSLEEP
       echo "[$(ts)] 批异常退出 rc=$rc（infra 故障/LLM 断连）第 ${fail} 次 → ${wait_s}s 后重试" >> "$LOG"
-      sleep "$wait_s"
+      sp "$wait_s"
     fi
   fi
 done

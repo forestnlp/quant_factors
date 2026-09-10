@@ -10,7 +10,7 @@
 
 ## 二、当前阵地（已验证的事实，可直接信任）
 
-- **数据**：12 数据集 2020-01~2026-09-07（财务三表 2019Q1 起）；宽表 `data/derived/features.parquet` 776 万行 × 38 特征 + 标签，check 体检门全绿（含九节财务体检：BS 恒等式 24.28 万行仅 10 违例）
+- **数据**：12 数据集 2020-01~2026-09-09（财务三表 2019Q1 起）；宽表 `data/derived/features.parquet` 777 万行 × 38 特征 + 标签，check 体检门全绿（含九节财务体检：BS 恒等式 24.28 万行仅 10 违例）
 - **官方答案库**：`data/raw/jq/alpha_ref/` 33 片全历史 alpha101；`derived/alpha_board.csv` 87 因子同口径榜单（auc 入全场 Top12；官方头部=正向结构类，与自家负向量能类互补）
 - **裁判体系**：eval.py（IC/ICIR/分层，秒级）+ backtest.py（vectorbt 组合层，自证与手算误差 2e-16）；对答案获官方盖章（alpha_002/006 Pearson 0.999+）
 - **更新机制**：`python -m research.update --deep` 一键补到最新（断点续跑=更新，实战验证 4 次）；通道独占锁防并发
@@ -31,7 +31,9 @@
 7. **signals/ 层已建成（2026-09-09 晚）**：`python -m research.signals` 输出当日应持 Top-10/买卖动作（选股直调 backtest.topk_weights 同一实现，08-25 独立复算逐票一致；持仓=数据纯函数无状态文件）。**顺手堵住系统性缺口**：alpha 产物是编译时快照、update 重建宽表后不自动跟新（实查 a_rev_x_lowvol 停 09-07）→ signals 内置 `_refresh_alpha`（产物截止<宽表截止→按账本表达式自动重编译）。执行口径诚实声明：回测按信号日收盘成交，实盘次日下单有约 1 日漂移，以实盘实测为准。执行节奏：数据截止日恰为调仓日（全局第 10n 交易日）才换仓，其余日维持
 8. P3 新闻/CCTV 情绪因子：**通道实测不通**（09-09 云端探针：研究环境无 get_cctv_news/get_news，属 JQData 商业版）；传导链最长，最低优先级
 9. ~~待用户确认转正~~ ✅ 09-09 用户批准，a_retail_chase_quiet / a_quality_quiet 已转 product（账本+FACTORS 同步）
-10. **⚠️ 09-09 批量挖掘诚实警示（合成战役前必读）**：首批 17 轮过线 6 个，但**表达式全部含 mf_net_pct_main（主力净流入）**——同一味原料的家族簇，IS 多重检验风险高；去重门（秩相关>0.9）挡住了换皮但挡不住"同原料不同配方"。**合成前必须先给 6 个新候选跑 WFO，且合成权重按家族簇折减**（同簇视为一支枪）
+10. ~~09-09 批量挖掘诚实警示~~ ✅ 已处置（09-10 三步歼灭战+家族代表制，结论28/29）：44 候选全过 WFO 清洗（43 过）、dig 及格线收紧 v2（ICIR>0.40 + Sharpe≥0.55）、famcorr 血缘矩阵落地、9 支家族重复退役。**现役=3 product + ~43 candidate（全过 WFO、族族有代表）**；后续制度=候选每涨 20 支跑一轮 `wfo_screen + famcorr + 家族代表制`（全自动机器活）
+11. ~~ML 组合侦察演习~~ ✅ 09-10 打完（结论30，用户批准试水）：`ml_combo.py` 逐年向前 LightGBM——信号层大胜（RankIC 0.112/ICIR 5.27/正率 80%）但**组合层与头名单枪打平**（同窗 2022 起：ML +14.1%/0.64 vs a_small_value +14.4%/0.63）→ **同质弹药 ML 榨不出新钱**；产物 ml_lgbm.parquet 不入账本
+12. **当前主攻=挖到 100 支 → 合成三战（用户定）**：dig 新门净产 ~1.5 支/时，预计 09-12 前后到 100。三战=**ML vs 族折减等权 vs 头名单枪三方同场预注册竞技**（及格线=明确超越最优单枪 a_small_value 0.78，事前写死；famcorr.json 是族折减权重直接输入）；若池仍同质则三战继续缓打
 
 ## 四、术语人话对照（用户读文档遇到生词查这里；汇报一律用大白话）
 
@@ -76,7 +78,11 @@ conda run -n jaycode python -m research.wfo years <因子> --reverse   # 逐年�
 conda run -n jaycode python -m research.wfo rotate a:rev b:rev       # 滚动年度选枪
 conda run -n jaycode python -m research.signals                     # 每日荐股 Top-10（含自动补编译滞后产物）
 conda run -n jaycode python -m research.dig stats            # 一屏仪表盘：库存+近24h产出速率+健康判决
-bash research/dig_supervisor.sh &            # dig 监工（cron 每 30min 保活；PAUSE_DIG 旗标=暂停；状态看 data/derived/dig_supervisor.log）
+# —— 后台挖掘启/停/查（用户自助三态）——
+# 查:   conda run -n jaycode python -m research.dig stats（见上）
+# 启动: nohup bash research/dig_supervisor.sh > /dev/null 2>&1 &   （平时不用管，cron 每 30min 自动拉起）
+# 暂停: touch data/derived/PAUSE_DIG      恢复: rm data/derived/PAUSE_DIG
+# 单跑一批（不需监工）: conda run -n jaycode python -m research.dig run --rounds 20 --patience 5
 bash research/dig_health.sh                  # dig 健康哨兵（cron 每 30min；监工+cron 双哑火的兜底，异常写 data/derived/dig_health.log）
 conda run -n jaycode python -m research.wfo_screen [因子...]  # 候选批量 WFO 清洗（断点续跑，判决在 derived/wfo_screen.jsonl）
 conda run -n jaycode python -m research.famcorr  # 全体 active 因子血缘矩阵（derived/famcorr.json，截面≥300 保护）

@@ -293,16 +293,28 @@ def cmd_run(a: argparse.Namespace) -> None:
 
 
 def cmd_stats(_: argparse.Namespace) -> None:
+    """一屏仪表盘：库存量（账本）+ 生产速率（心跳线）+ 一句话健康判决。"""
     p = derived_dir() / "dig_log.jsonl"
-    if not p.exists():
-        print(json.dumps({"ok": True, "rounds": 0}))
-        return
-    rows = [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines()]
-    last = rows[-1]
-    n_pass = sum(1 for r in rows if r.get("verdict") == "PASS")
-    print(json.dumps({"ok": True, "rounds": len(rows), "pass": n_pass,
-                      "last_ts": last.get("ts"), "last_round": last},
-                     ensure_ascii=False))
+    lib = factorlib.load()
+    cnt: dict[str, int] = {}
+    for r in lib["factors"].values():
+        cnt[r["status"]] = cnt.get(r["status"], 0) + 1
+    rows = ([json.loads(x) for x in p.read_text(encoding="utf-8").splitlines()]
+            if p.exists() else [])
+    now = datetime.datetime.now()
+    day_ago = (now - datetime.timedelta(hours=24)).isoformat(timespec="seconds")
+    d24 = [r for r in rows if r.get("ts", "") >= day_ago]
+    n24 = sum(1 for r in d24 if r.get("verdict") == "PASS")
+    last_ts = rows[-1].get("ts", "") if rows else ""
+    try:
+        age_h = (now - datetime.datetime.fromisoformat(last_ts)).total_seconds() / 3600
+    except ValueError:
+        age_h = float("inf")
+    verdict = ("健康" if age_h < 1.5 else "心跳停更（查 dig_health.log / 监工日志）")
+    print(f"库存: candidate {cnt.get('candidate', 0)} | product {cnt.get('product', 0)}"
+          f" | rejected {cnt.get('rejected', 0)} | retired {cnt.get('retired', 0)}")
+    print(f"近 24h: 假设 {len(d24)} → 过线 {n24}（≈{n24 / 24:.1f} 支/小时）")
+    print(f"最后心跳: {last_ts or '（无）'}（{age_h:.1f} 小时前）→ {verdict}")
 
 
 def main() -> None:

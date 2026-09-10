@@ -2,7 +2,7 @@
 
 > 用途：任何新会话恢复任务的唯一入口。PROJECT.md 是现状全貌，本文件是"现在在哪、下一步打什么、怎么打"。
 > 维护纪律：每场战役结束/路线改判/重大发现时更新本文件（与 PROJECT.md 同步），随代码一起提交。
-> 最后更新：2026-09-09 晨（update 至 09-08 收盘+build 三修；重提判决：a_quality_quiet 过线入候选、a_low_vol_quiet 被真去重门拒；待批 L4 批量夜跑）
+> 最后更新：2026-09-10 午（候选通胀三步歼灭战打完：44 候选全过 WFO=43 过 1 挂、dig 及格线收紧 v2=ICIR 0.40/Sharpe 0.55 并复产、血缘矩阵 famcorr 出表；**下一步=43 候选家族取舍待用户拍板**，详见 PROJECT.md 结论28/29）
 
 ## 一、我们在做什么（30 秒版）
 
@@ -74,6 +74,8 @@ conda run -n jaycode python -m research.sentinel         # 在库因子健康复
 conda run -n jaycode python -m research.wfo years <因子> --reverse   # 逐年成绩（滚动验证）
 conda run -n jaycode python -m research.wfo rotate a:rev b:rev       # 滚动年度选枪
 conda run -n jaycode python -m research.signals                     # 每日荐股 Top-10（含自动补编译滞后产物）
-bash research/dig_supervisor.sh &            # dig 监工（09-09 已挂 cron 每 30min 保活，状态看 data/derived/dig_supervisor.log）
+bash research/dig_supervisor.sh &            # dig 监工（cron 每 30min 保活；PAUSE_DIG 旗标=暂停；状态看 data/derived/dig_supervisor.log）
+conda run -n jaycode python -m research.wfo_screen [因子...]  # 候选批量 WFO 清洗（断点续跑，判决在 derived/wfo_screen.jsonl）
+conda run -n jaycode python -m research.famcorr  # 全体 active 因子血缘矩阵（derived/famcorr.json，截面≥300 保护）
 ```
 ```

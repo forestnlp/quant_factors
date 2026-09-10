@@ -11,9 +11,11 @@
   #6 成本失控       → 硬预算：--rounds 上限 + 连续 --patience 轮零产出自动停机。
   #7 静默卡死       → 每轮追加 data/derived/dig_log.jsonl（心跳线），stats 可查。
 
-及格线（预注册，跑前写死）：
-  IC 初裁：IS/neu |ICIR| > 0.25（PROPOSE.md 规则3，v2 协议下只看 IS 窗口）
-  组合终裁：IS 费后年化 > 0 且 IS Sharpe ≥ --baseline（默认 0.46 = v_amt 同口径基线）
+及格线（预注册 v2，2026-09-10 经用户批准收紧；候选通胀事故后改标准）：
+  IC 初裁：IS/neu |ICIR| > 0.40（旧 0.25 系单发人工审口径，机器 7×24 下失效：
+           09-09 一夜 80 假设 20 过线=按运气也该中，IS 门槛已筛不掉噪声）
+  组合终裁：IS 费后年化 > 0 且 IS Sharpe ≥ --baseline（默认 0.55 = 现役产品
+           a_rev_x_lowvol IS 0.58 同档；旧 0.46 门槛放进一整族换皮枪）
   方向：回测方向与 IS/neu RankIC 符号强制联动（IC>0 → reverse 做多高值端，规则6例外）
   回路产出的最高状态 = candidate（升 product 必须人工发起 WFO 预注册，机器不自封产品）
 
@@ -38,7 +40,7 @@ from research import alpha, backtest as bt, eval as ev, factorlib
 from research.config import derived_dir, llm_conf
 
 PROPOSE_MD = Path(alpha.__file__).with_name("PROPOSE.md")
-ICIR_GATE = 0.25          # IC 初裁及格线（IS/neu）
+ICIR_GATE = 0.40          # IC 初裁及格线（IS/neu，2026-09-10 收紧：旧 0.25）
 CORR_CAP = 0.90           # 与在库 active 因子秩相关上限（#2 去重）
 MAX_FAIL_MECH = 2         # 同机制连续失败次数 → 拉黑
 
@@ -101,8 +103,18 @@ def propose(cols: list[str], exprs: dict, recap: list[dict],
         "\n思维从简（3 句以内），把输出预算留给 JSON 本身，先写 JSON 再解释。"
         "\n只输出 JSON: {\"name\":..., \"expr\":..., \"hypothesis\":\"一句话经济逻辑\","
         " \"mechanism\":\"机制短标签\"}")
+    # 原料多样性约束（首批教训 09-09：6/6 过线枪全含 mf_net_pct_main=同原料换配方）
+    ing: dict[str, int] = {}
+    for e in exprs.values():
+        for c in cols:
+            if c in e:
+                ing[c] = ing.get(c, 0) + 1
+    hot = [f"{c}({n}次)" for c, n in sorted(ing.items(), key=lambda x: -x[1])[:6]
+           if n >= 3]
     user_p = ("在册表达式（严禁等价改写或换皮）:\n" +
               json.dumps(exprs, ensure_ascii=False) +
+              "\n\n已过度使用的原料: " + (", ".join(hot) if hot else "（无）") +
+              "——除非经济逻辑特别硬，否则必须改用未用过的原料组合新矿，别再围着它们换配方。" +
               "\n\n机制黑名单（连续失败，勿再碰）: " +
               (", ".join(blacklist) if blacklist else "（无）") +
               "\n\n最近判决复盘（只给 IS 数字）:\n" +
@@ -300,8 +312,8 @@ def main() -> None:
     r.add_argument("--rounds", type=int, default=5)
     r.add_argument("--patience", type=int, default=3,
                    help="连续 N 轮零产出停机（#6）")
-    r.add_argument("--baseline", type=float, default=0.46,
-                   help="组合终裁 IS Sharpe 及格线（现役基线）")
+    r.add_argument("--baseline", type=float, default=0.55,
+                   help="组合终裁 IS Sharpe 及格线（2026-09-10 收紧：旧 0.46）")
     r.set_defaults(func=cmd_run)
     sub.add_parser("stats", help="心跳线与战果").set_defaults(func=cmd_stats)
     a = ap.parse_args()

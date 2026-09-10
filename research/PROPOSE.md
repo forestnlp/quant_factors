@@ -10,7 +10,7 @@
 1. 读记忆    factorlib exprs            # 所有在册表达式+状态，查重防撞
 2. 提假设    一句话经济逻辑（谁为什么会犯错误 → 我赚谁的钱）
 3. 编译      alpha compile --name a_xxx --expr "..."     # 失败即拒收（语法/白名单）
-4. IC 初裁   eval --json a_xxx          # 及格线：IS/neu |ICIR|>0.25 且 IS/OOS 同号
+4. IC 初裁   eval --json a_xxx          # 及格线：IS/neu |ICIR|>0.40 且 IS/OOS 同号
 5. 组合终裁  backtest a_xxx --json -k 100 --rebal 10 --band 0.10,0.50 [--reverse]
              # 及格线（事前定）：IS 费后年化>0 且 Sharpe ≥ 现役基线；过线才准看 OOS 一次
 6. 记账      factorlib add / record-eval / set-status    # 判决和理由写进 history
@@ -20,7 +20,7 @@
 
 1. **无经济逻辑**：说不出"谁犯错误、我赚谁的钱"→ 拒（数据 dredging 的根源）。
 2. **重复发明**：与 `exprs` 中任一表达式算子/列组合等价 → 拒（先看失败记录）。
-3. **IC 不及格**：IS/neu |ICIR| ≤ 0.25，或 IS/OOS 反号 → 拒并入库（rejected 留教训）。
+3. **IC 不及格**：IS/neu |ICIR| ≤ 0.40，或 IS/OOS 反号 → 拒并入库（rejected 留教训）。
 4. **IC 强组合弱**：|ICIR|>0.5 但 band 组合 IS Sharpe < 基线 → **IC 榜≠钱榜**（结论14/彩排两轮实证），按组合判决，不许拿 IC 申辩。
 5. **两腿皆弱**：交互/合成因子若每条腿单腿组合都未达标 → 默认拒（合成是提纯不是堆叠，结论13）。
 6. **调参救活**：判决不过线后改 k/rebal/band 想救 → 拒（那是过拟合；一次假设=一次预注册判决）。**例外：方向修正不算调参**——回测方向必须与 eval IS/neu RankIC 符号强制联动（IC>0 → `--reverse` 做多高值端；彩排第2轮教训：方向选反 IS -11.8% 差点错杀好假设，核对语义是正确性修复非调参，同结论12③）。

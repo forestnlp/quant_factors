@@ -43,6 +43,7 @@ PROPOSE_MD = Path(alpha.__file__).with_name("PROPOSE.md")
 ICIR_GATE = 0.40          # IC 初裁及格线（IS/neu，2026-09-10 收紧：旧 0.25）
 CORR_CAP = 0.90           # 与在库 active 因子秩相关上限（#2 去重）
 MAX_FAIL_MECH = 2         # 同机制连续失败次数 → 拉黑
+GRAVE_MIN = 3             # 跨批机制败部门槛：v2 新门以来同机制被拒次数 ≥ 此值入黑名单
 
 
 class InfraError(Exception):
@@ -50,6 +51,30 @@ class InfraError(Exception):
 
 
 # ---------------- LLM 假设器 ----------------
+
+V2_TS = "2026-09-10T09"   # 新门 v2 上线时刻（机制败部账本只记 v2 后的判决，旧门数据口径不可比）
+
+
+def mech_graveyard() -> list[str]:
+    """跨批机制墓地：从心跳线统计 v2 新门以来同机制被拒次数 ≥GRAVE_MIN 的机制。
+
+    （09-11 补：原机制黑名单只活在单批内存里，换批即失忆——LLM 会反复重挖
+    同一具尸体。心跳线 dig_log.jsonl 本就每轮带 mechanism+verdict，直接汇总。）"""
+    p = derived_dir() / "dig_log.jsonl"
+    if not p.exists():
+        return []
+    cnt: dict[str, int] = {}
+    for ln in p.read_text(encoding="utf-8").splitlines():
+        try:
+            r = json.loads(ln)
+        except ValueError:
+            continue
+        if (r.get("verdict") == "REJECT" and r.get("ts", "") >= V2_TS
+                and r.get("mechanism")):
+            m = str(r["mechanism"])[:24]
+            cnt[m] = cnt.get(m, 0) + 1
+    return sorted(m for m, c in cnt.items() if c >= GRAVE_MIN)
+
 
 def _llm(messages: list[dict]) -> str:
     """调 OpenAI 兼容端点（JSON mode）。一切传输/协议异常 → InfraError。"""
@@ -91,8 +116,13 @@ def _extract_json(text: str) -> dict | None:
 
 
 def propose(cols: list[str], exprs: dict, recap: list[dict],
-            blacklist: list[str]) -> dict | None:
-    """一次假设（JSON mode）。内容畸变=业务级失败（返回 None），传输故障=InfraError。"""
+            blacklist: list[str],
+            graveyard: list[str] | None = None) -> dict | None:
+    """一次假设（JSON mode）。内容畸变=业务级失败（返回 None），传输故障=InfraError。
+
+    exprs 带状态（name→[status, expr]）：死路（rejected/retired）单独成段点名，
+    让模型明知山有虎避开那山（09-11：190 条败部此前与活枪混排，等于没区分）。
+    graveyard=跨批机制墓地（mech_graveyard 汇总），与本批黑名单合并去重。"""
     spec = open(PROPOSE_MD, encoding="utf-8").read()
     sys_p = (
         "你是量化因子假设器（L4 回路），严格遵守以下作业规范：\n\n" + spec +
@@ -105,18 +135,23 @@ def propose(cols: list[str], exprs: dict, recap: list[dict],
         " \"mechanism\":\"机制短标签\"}")
     # 原料多样性约束（首批教训 09-09：6/6 过线枪全含 mf_net_pct_main=同原料换配方）
     ing: dict[str, int] = {}
-    for e in exprs.values():
+    for st_e in exprs.values():
         for c in cols:
-            if c in e:
+            if c in st_e[1]:
                 ing[c] = ing.get(c, 0) + 1
     hot = [f"{c}({n}次)" for c, n in sorted(ing.items(), key=lambda x: -x[1])[:6]
            if n >= 3]
-    user_p = ("在册表达式（严禁等价改写或换皮）:\n" +
-              json.dumps(exprs, ensure_ascii=False) +
+    live = {n: e for n, (s, e) in exprs.items() if s in ("candidate", "product")}
+    dead = sorted(n for n, (s, _) in exprs.items()
+                  if s in ("rejected", "retired"))
+    user_p = ("在册活枪表达式（严禁等价改写或换皮）:\n" +
+              json.dumps(live, ensure_ascii=False) +
+              f"\n\n已验证死路 {len(dead)} 条（这些因子全部被拒/退役，禁止同机制变体再试；"
+              "完整表达式可按需自查，先列名）:\n" + ", ".join(dead) +
               "\n\n已过度使用的原料: " + (", ".join(hot) if hot else "（无）") +
               "——除非经济逻辑特别硬，否则必须改用未用过的原料组合新矿，别再围着它们换配方。" +
               "\n\n机制黑名单（连续失败，勿再碰）: " +
-              (", ".join(blacklist) if blacklist else "（无）") +
+              (", ".join(sorted(set(blacklist) | set(graveyard or []))) or "（无）") +
               "\n\n最近判决复盘（只给 IS 数字）:\n" +
               json.dumps(recap[-8:], ensure_ascii=False))
     for _ in range(2):                      # 内容畸变重试一次
@@ -238,9 +273,10 @@ def cmd_run(a: argparse.Namespace) -> None:
     zero_streak, n_pass = 0, 0
 
     for rnd in range(1, a.rounds + 1):
-        # 在册表达式去重索引每轮重读（本轮入库的也要防）
-        exprs = {n: r["expr"] for n, r in factorlib.load()["factors"].items()}
-        prop = propose(base_cols, exprs, recap, blacklist)
+        # 在册表达式去重索引每轮重读（本轮入库的也要防）；带状态供假设器区分活枪/死路
+        lib = factorlib.load()
+        exprs = {n: (r["status"], r["expr"]) for n, r in lib["factors"].items()}
+        prop = propose(base_cols, exprs, recap, blacklist, mech_graveyard())
         if prop is None:
             recap.append({"round": rnd, "verdict": "畸变",
                           "msg": "输出非合法 JSON/缺字段（已重试一次）"})
@@ -250,7 +286,7 @@ def cmd_run(a: argparse.Namespace) -> None:
         else:
             name, expr = prop["name"], prop["expr"]
             mech = prop["mechanism"]
-            dup = norm_expr(expr) in {norm_expr(e) for e in exprs.values()}
+            dup = norm_expr(expr) in {norm_expr(e[1]) for e in exprs.values()}
             if dup or name in exprs:
                 recap.append({"round": rnd, "name": name, "verdict": "重复",
                               "msg": "表达式或名字与在册重复"})

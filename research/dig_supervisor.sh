@@ -44,8 +44,10 @@ while true; do
   else
     echo "[$(ts)] 无挖掘进程 → 开新批 (rounds=20 patience=5)" >> "$LOG"
     # faulthandler：段错误(rc=139)时把 Python 栈打进批日志（两次 139 均零输出即崩，须留证）
+    # 9>&-：挖批严禁继承监工的锁 fd（09-11 教训：监工被 kill 后，幸存挖批持有 fd9
+    #   → flock 锁借尸还魂，新监工被挡、cron 也救不回，直到批自己退出）
     PYTHONFAULTHANDLER=1 "$PYENV" -m research.dig run \
-      --rounds 20 --patience 5 >> "$BATCH_LOG" 2>&1
+      --rounds 20 --patience 5 >> "$BATCH_LOG" 2>&1 9>&-
     rc=$?
     if [ "$rc" -eq 0 ]; then
       fail=0

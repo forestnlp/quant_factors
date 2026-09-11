@@ -60,7 +60,8 @@
 - 云端陷阱：jqcli exec 报错 returncode 仍为 0（已在 jq_channel 抛修）；估值/资金流 T+1 出数；`get_valuation` 1 万行静默截断；**量价/龙虎榜晚 8 点后才能抓 T 日（盘中=半天快照毁数据，2026-09-07 事故，update.py CLOSE_HOUR 已机制化，rules 第 7 条）**
 - 财务口径：聚宽利润表/现金流=**年度内累计值**（TTM 换算在 build.py `_fin_prep`）；**期间平移方向是未来函数高发区**（首版写反被茅台对答案当场抓获，教训在 PROJECT.md 下一步#2）；特征生效日=三表 pub_date 取晚
 - 验证纪律：落盘必读回核对范围；OOS 已作废，一切验收用滚动 WFO；重大发现即时归档（rules 第 5 节第 6 条）
-- **dig 批 rc=139（09-09/09-10 两次）**：开批 1-2 秒零输出即崩，疑凶=conda run 包装层（监工已改直连 env python + PYTHONFAULTHANDLER 留栈）；**杀监工须连退避 sleep 子进程一起清**（孤儿继承 flock fd → 新监工被单实例锁静默挡下，09-10 已加 EXIT trap 根治）
+- **dig 批 rc=139（09-09/09-10 两次）**：开批 1-2 秒零输出即崩，疑凶=conda run 包装层（监工已改直连 env python + PYTHONFAULTHANDLER 留栈）；**杀监工须连退避 sleep 子进程一起清**（孤儿继承 flock fd → 新监工被单实例锁静默挡下，09-10 已加 EXIT trap 根治；09-11 补漏：正常冷却分支同为裸 sleep 已改 sp()）
+- **思维链模型三雷（09-11 汇总）**：① `max_tokens` 被 reasoning 吃掉→JSON 截断=malformed 主嫌（已 4000→16000，本地端点实测接受）；② prompt 里写"思维从简"=自废武功（思维链深度=挖有效因子的本钱，用户拍板解封）；③ qwen3 的 JSON 可能落在 `reasoning` 字段而非 `content`（_extract_json 已兼容）
 
 ## 六、常用命令速查
 

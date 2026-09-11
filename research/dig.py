@@ -44,6 +44,9 @@ ICIR_GATE = 0.40          # IC 初裁及格线（IS/neu，2026-09-10 收紧：�
 CORR_CAP = 0.90           # 与在库 active 因子秩相关上限（#2 去重）
 MAX_FAIL_MECH = 2         # 同机制连续失败次数 → 拉黑
 GRAVE_MIN = 3             # 跨批机制败部门槛：v2 新门以来同机制被拒次数 ≥ 此值入黑名单
+# 输出预算（09-11 用户拍板放大 4000→16000：本地部署模型零边际成本，
+# 思维链深度=挖有效因子的本钱；旧值下 reasoning 吃光预算→JSON 截断=malformed 主嫌）
+MAX_TOKENS = 16000
 
 
 class InfraError(Exception):
@@ -85,8 +88,8 @@ def _llm(messages: list[dict]) -> str:
             headers={"Authorization": f"Bearer {key}"},
             json={"model": model, "messages": messages,
                   "response_format": {"type": "json_object"},
-                  "max_tokens": 4000},
-            timeout=(10, 600))
+                  "max_tokens": MAX_TOKENS},
+            timeout=(10, 900))
     except requests.RequestException as e:
         raise InfraError(f"LLM 通道故障: {e}") from None
     if r.status_code != 200:
@@ -130,8 +133,10 @@ def propose(cols: list[str], exprs: dict, recap: list[dict],
         "\n算子白名单: rank delay delta ts_mean ts_std ts_sum ts_min ts_max "
         "ts_corr log abs sign relu clip；四则+幂运算；时序窗口≤250。"
         "\n因子名必须以 a_ 开头的新名字（小写下划线，别用数字年份）。"
-        "\n思维从简（3 句以内），把输出预算留给 JSON 本身，先写 JSON 再解释。"
-        "\n只输出 JSON: {\"name\":..., \"expr\":..., \"hypothesis\":\"一句话经济逻辑\","
+        "\n先充分思考再定稿：逐一推敲经济逻辑（谁犯错、我赚谁的钱）、"
+        "比对在册活枪与死路避免换皮、想清原料与算子的搭配，再定稿。"
+        "思考完成后输出且只输出 JSON: "
+        "{\"name\":..., \"expr\":..., \"hypothesis\":\"一句话经济逻辑\","
         " \"mechanism\":\"机制短标签\"}")
     # 原料多样性约束（首批教训 09-09：6/6 过线枪全含 mf_net_pct_main=同原料换配方）
     ing: dict[str, int] = {}

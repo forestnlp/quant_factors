@@ -14,7 +14,8 @@ LOG="data/derived/dig_supervisor.log"
 LOCK="data/derived/dig_supervisor.lock"
 HB="data/derived/dig_log.jsonl"
 BATCH_LOG="data/derived/dig_batch_auto.log"
-STALE=1800            # 心跳停更判定（秒）：一轮约 3-4 分钟，30 分钟极宽裕
+STALE=3600            # 心跳停更判定（秒）（09-11 放宽 1800→3600：深思考单轮最坏
+                      #   = 畸变重试 2×900s 超时 + 机审 ≈38 分钟，30 分钟线会误杀健康批）
 COOLDOWN=180          # 正常收工后的冷却（秒）（09-11 加速：600→180，本地 LLM 无限流，冷却纯属浪费；
                       #   故障退避仍按 180×2^fail 指数爬升，不无脑热循环）
 MAXSLEEP=7200         # 故障退避上限（秒）

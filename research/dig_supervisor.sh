@@ -15,7 +15,8 @@ LOCK="data/derived/dig_supervisor.lock"
 HB="data/derived/dig_log.jsonl"
 BATCH_LOG="data/derived/dig_batch_auto.log"
 STALE=1800            # 心跳停更判定（秒）：一轮约 3-4 分钟，30 分钟极宽裕
-COOLDOWN=600          # 正常收工后的冷却（秒）
+COOLDOWN=180          # 正常收工后的冷却（秒）（09-11 加速：600→180，本地 LLM 无限流，冷却纯属浪费；
+                      #   故障退避仍按 180×2^fail 指数爬升，不无脑热循环）
 MAXSLEEP=7200         # 故障退避上限（秒）
 
 exec 9>"$LOCK"
@@ -48,7 +49,7 @@ while true; do
     if [ "$rc" -eq 0 ]; then
       fail=0
       echo "[$(ts)] 批正常收工（rc=0，含止损/预算停机）→ 冷却 $((COOLDOWN/60)) 分钟" >> "$LOG"
-      sleep "$COOLDOWN"
+      sp "$COOLDOWN"
     else
       fail=$((fail + 1))
       wait_s=$(( COOLDOWN * 2**fail ))

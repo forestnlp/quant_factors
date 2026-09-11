@@ -10,7 +10,8 @@
     截面   = rank(x)                    当日截面百分位 [0,1]
     时序   = delay(x,n) delta(x,n) ts_mean(x,n) ts_std(x,n) ts_sum(x,n)
              ts_min(x,n) ts_max(x,n) ts_corr(x,y,n)      全部只用 [t-n, t]
-    逐点   = log(x)（x<=0→NaN）abs(x) sign(x)
+    逐点   = log(x)（x<=0→NaN）abs(x) sign(x) relu(x)=max(x,0)
+             clip(x,lo,hi) 双边饱和
 
 产物落 data/derived/alpha/<name>.parquet（长表 date/code/value），
 eval/sentinel 等工具按列名自动加载——与宽表列同一契约。
@@ -93,6 +94,10 @@ _OPS = {
     "log":     ([("x", "df")], lambda x: np.log(x.where(x > 0))),
     "abs":     ([("x", "df")], lambda x: x.abs()),
     "sign":    ([("x", "df")], lambda x: x.sign()),
+    # 逐点非线性（2026-09-11 增）：relu=只取正半边（单边信号）；clip=双边饱和
+    "relu":    ([("x", "df")], lambda x: x.clip(lower=0.0)),
+    "clip":    ([("x", "df"), ("lo", "num"), ("hi", "num")],
+                lambda x, lo, hi: x.clip(float(lo), float(hi))),
 }
 
 _BIN_OK = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow)
@@ -129,10 +134,13 @@ def _validate(node: ast.AST, cols: set[str], used: set[str]):
             raise CompileError(
                 f"{name}() 需要 {len(specs)} 个参数，得到 {len(node.args)}")
         for arg, (_, kind) in zip(node.args, specs):
-            if kind == "int":
-                if not (isinstance(arg, ast.Constant)
-                        and isinstance(arg.value, (int, float))):
-                    raise CompileError(f"{name}() 的窗口参数必须是数字常量")
+            if kind in ("int", "num"):
+                # 负数常量在 AST 里是 UnaryOp(USub, Constant)，须一并放行
+                ok = (isinstance(arg, ast.Constant)
+                      and isinstance(arg.value, (int, float)))
+                neg = (isinstance(arg, ast.UnaryOp) and _is_neg_const(arg))
+                if not (ok or neg):
+                    raise CompileError(f"{name}() 的参数必须是数字常量")
             else:
                 _validate(arg, cols, used)
     elif isinstance(node, ast.Name):
@@ -141,6 +149,12 @@ def _validate(node: ast.AST, cols: set[str], used: set[str]):
         used.add(node.id)
     else:
         raise CompileError(f"禁用语法节点: {type(node).__name__}")
+
+
+def _is_neg_const(arg: ast.UnaryOp) -> bool:
+    return (isinstance(arg.op, ast.USub)
+            and isinstance(arg.operand, ast.Constant)
+            and isinstance(arg.operand.value, (int, float)))
 
 
 class _Ctx:

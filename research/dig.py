@@ -128,7 +128,7 @@ def propose(cols: list[str], exprs: dict, recap: list[dict],
         "你是量化因子假设器（L4 回路），严格遵守以下作业规范：\n\n" + spec +
         "\n\n可用列（宽表真实列，日期/代码/标签列已剔除）: " + ", ".join(cols) +
         "\n算子白名单: rank delay delta ts_mean ts_std ts_sum ts_min ts_max "
-        "ts_corr log abs sign；四则运算；时序窗口≤250。"
+        "ts_corr log abs sign relu clip；四则+幂运算；时序窗口≤250。"
         "\n因子名必须以 a_ 开头的新名字（小写下划线，别用数字年份）。"
         "\n思维从简（3 句以内），把输出预算留给 JSON 本身，先写 JSON 再解释。"
         "\n只输出 JSON: {\"name\":..., \"expr\":..., \"hypothesis\":\"一句话经济逻辑\","

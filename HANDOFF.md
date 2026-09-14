@@ -2,7 +2,7 @@
 
 > 用途：任何新会话恢复任务的唯一入口。PROJECT.md 是现状全貌，本文件是"现在在哪、下一步打什么、怎么打"。
 > 维护纪律：每场战役结束/路线改判/重大发现时更新本文件（与 PROJECT.md 同步），随代码一起提交。
-> 最后更新：2026-09-14 晚（**行业日频 PIT 回填战役进行中**：fetch `industry_daily` 通道建成、探针满分、152 片全史回填后台跑；**Cookie 自动续票技能 `jq_refresh` 建成**，update.py [0/4] 前置自愈，Cookie 过期不再需要人工换票。战役目标=日频行业归属 → 行业聚合原料（动量/相对强度/热度）→ dig 吃新原料 + ML 复跑验 RankIC 上台阶。前序：ML 二番战 142=46 一字不差（结论31 数量免疫）、聚宽同款引擎对表 IC 互验差 0.7%（结论32），详见 PROJECT.md）
+> 最后更新：2026-09-14 深夜（**行业线第一战役数据层收官（结论33）**：日频 PIT 行业全史 1666 天×793 万行验收三项全绿；宽表 +5 列行业聚合原料（ind_r_20d/ind_r_1/ind_amt_5_20/ind_rs_20d/ind_lead_20），dig 零改动自动吃新矿；**ML 复跑验收中**（判决点=行业正交原料能否让 RankIC 突破 0.114 平台，日志 `data/derived/ml_combo_ind.log`）。**Cookie 自动续票 `jq_refresh` 建成**，update [0/4] 前置自愈；dig 监工补 PAUSE_DIG 开关（此前文档有、代码无）。详见 PROJECT.md 结论31/32/33）
 
 ## 一、我们在做什么（30 秒版）
 
@@ -85,7 +85,7 @@ conda run -n jaycode python -m research.dig stats            # 一屏仪表盘�
 # —— 后台挖掘启/停/查（用户自助三态）——
 # 查:   conda run -n jaycode python -m research.dig stats（见上）
 # 启动: nohup bash research/dig_supervisor.sh > /dev/null 2>&1 &   （平时不用管，cron 每 30min 自动拉起）
-# 暂停: touch data/derived/PAUSE_DIG      恢复: rm data/derived/PAUSE_DIG
+# 暂停: touch data/derived/PAUSE_DIG      恢复: rm data/derived/PAUSE_DIG   （09-14 起监工真正认这个开关：常驻监工检测到即退出，rm 后 cron 30 分钟内拉起）
 # 单跑一批（不需监工）: conda run -n jaycode python -m research.dig run --rounds 20 --patience 5
 bash research/dig_health.sh                  # dig 健康哨兵（cron 每 30min；监工+cron 双哑火的兜底，异常写 data/derived/dig_health.log）
 conda run -n jaycode python -m research.wfo_screen [因子...]  # 候选批量 WFO 清洗（断点续跑，判决在 derived/wfo_screen.jsonl）

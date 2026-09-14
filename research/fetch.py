@@ -504,6 +504,63 @@ def fetch_industry(start_year: int, end_year: int, force: bool = False) -> None:
                    force, "industry")
 
 
+INDUSTRY_DAILY_TMPL = '''# -*- coding: utf-8 -*-
+# 行业日频 PIT：分片内逐交易日全市场快照（补季末快照的季内陈旧与开年空窗）
+from jqdata import *
+import os
+import pandas as pd
+
+DAYS = {days!r}
+os.makedirs("jq_out", exist_ok=True)
+rows = []
+for d in DAYS:
+    codes = get_all_securities("stock", date=d).index.tolist()
+    for i in range(0, len(codes), 2000):
+        res = get_industry(codes[i:i + 2000], date=d)
+        for c, ind in res.items():
+            sw1 = ind.get("sw_l1", dict())
+            rows.append(dict(day=d, code=c,
+                             sw_l1=sw1.get("industry_code", ""),
+                             sw_l1_name=sw1.get("industry_name", ""),
+                             sw_l2=ind.get("sw_l2", dict()).get("industry_code", ""),
+                             jq_l1=ind.get("jq_l1", dict()).get("industry_code", ""),
+                             zjw=ind.get("zjw", dict()).get("industry_code", "")))
+df = pd.DataFrame(rows)
+p = os.path.join("jq_out", "{fname}")
+df.to_csv(p, index=False)
+print("rows=%d days=%d codes=%d size=%.1fMB" % (
+    len(df), df["day"].nunique(), df["code"].nunique(),
+    os.path.getsize(p) / 1048576.0))
+'''
+
+
+def fetch_industry_daily(start: str, end: str, chunk_days: int = 11,
+                         force: bool = False) -> None:
+    """行业日频 PIT：每 chunk_days 个交易日一片 → data/raw/jq/industry_daily/
+    季末快照的 as-of 对齐最多滞后 92 天且 2020Q1 空窗；行业要进因子原料，
+    必须精确到日。聚宽无变更历史接口，只能逐日快照暴刷（一次性回填）。
+    半月一片（单日 ~3 次 get_industry，远端 1500s 限内富余），断点续跑。"""
+    out_dir = raw_dir("jq", "industry_daily")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    days = jq.trading_days(start, end)
+    chunks = [days[i:i + chunk_days] for i in range(0, len(days), chunk_days)]
+    todo = [c for c in chunks
+            if force or not (out_dir / f"industry_daily_{c[0]}_{c[-1]}.csv").exists()]
+    print(f"[industry_daily] 交易日 {len(days)} 天（{len(chunks)} 片，本次取 {len(todo)}）")
+    for i, c in enumerate(todo, 1):
+        f = out_dir / f"industry_daily_{c[0]}_{c[-1]}.csv"
+        print(f"  [{i}/{len(todo)}] {c[0]}~{c[-1]}（{len(c)} 天）", flush=True)
+        try:
+            jq.run_script(INDUSTRY_DAILY_TMPL.format(days=c, fname=f.name),
+                          f.name, f, timeout=1800, exec_timeout=1500)
+        except jq.JqAuthError as e:
+            print(f"  [中止] {e}")
+            return
+    files = sorted(out_dir.glob("industry_daily_*.csv"))
+    total = sum(sum(1 for _ in open(x, encoding="utf-8")) - 1 for x in files)
+    print(f"[industry_daily] 覆盖核对: {len(files)} 片, {total} 行")
+
+
 def fetch_concept(start_year: int, end_year: int, force: bool = False) -> None:
     """概念成分 PIT：每年 4 个季末 × 399 概念 → data/raw/jq/concept/"""
     _fetch_by_year("concept", CONCEPT_YEAR_TMPL, start_year, end_year,
@@ -662,9 +719,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="聚宽取数任务")
     ap.add_argument("task", choices=["calendar", "probe", "daily", "auction",
                                      "valuation", "money_flow", "industry",
-                                     "concept", "finance", "finance_bs",
-                                     "finance_cf", "mtss", "billboard",
-                                     "st", "min_agg"])
+                                     "industry_daily", "concept", "finance",
+                                     "finance_bs", "finance_cf", "mtss",
+                                     "billboard", "st", "min_agg"])
     ap.add_argument("--start", default="2025-01-04",
                     help="起始日期（industry/concept/finance 任务传年份如 2025）；"
                          "聚宽行情起点为 2005-01-04（官方文档+实测）")
@@ -686,6 +743,8 @@ def main() -> None:
         fetch_moneyflow(a.start, a.end, a.chunk_days or 60, a.force)
     elif a.task == "industry":
         fetch_industry(int(a.start[:4]), int(a.end[:4]), a.force)
+    elif a.task == "industry_daily":
+        fetch_industry_daily(a.start, a.end, a.chunk_days or 11, a.force)
     elif a.task == "concept":
         fetch_concept(int(a.start[:4]), int(a.end[:4]), a.force)
     elif a.task == "finance":

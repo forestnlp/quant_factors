@@ -29,7 +29,7 @@ import argparse
 import datetime
 
 from research import jq_channel as jq
-from research import build, check, fetch
+from research import build, check, fetch, jq_refresh
 from research.config import raw_dir
 
 CLOSE_HOUR = 20    # 收盘数据可信时点：晚 8 点后 T 日量价/龙虎榜才是终值
@@ -81,6 +81,9 @@ def main() -> None:
     today = a.through or now.date().isoformat()
 
     print(f"===== 更新开始，目标截止 {today}（现在 {now:%H:%M}）=====")
+    print("[0/4] 聚宽通道自愈（会话失效则自动重新登录续票）...")
+    if not jq_refresh.ensure():
+        raise SystemExit("聚宽认证不可用且自动续票失败，中止更新（不静默跳数）")
     print("[1/4] 刷新交易日历 ...")
     fetch.fetch_calendar()
     all_days = jq.trading_days("2005-01-04", "2999-12-31")

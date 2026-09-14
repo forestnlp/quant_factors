@@ -2,7 +2,7 @@
 
 > 用途：任何新会话恢复任务的唯一入口。PROJECT.md 是现状全貌，本文件是"现在在哪、下一步打什么、怎么打"。
 > 维护纪律：每场战役结束/路线改判/重大发现时更新本文件（与 PROJECT.md 同步），随代码一起提交。
-> 最后更新：2026-09-10 下午（家族代表制清洗执行完毕=3 product+36 candidate；**ML 侦察演习打完：LightGBM 信号层大胜（RankIC 0.112/ICIR 5.3）但组合层与头名单枪 a_small_value 打平（同窗 0.64 vs 0.63）→ 同质弹药 ML 榨不出新钱，三战须换正交弹药**；dig 新门复产净产 ~1.5 支/时，目标 100 支（09-12 前后）后开三战预注册，详见 PROJECT.md 结论28/29/30）
+> 最后更新：2026-09-14 晚（**行业日频 PIT 回填战役进行中**：fetch `industry_daily` 通道建成、探针满分、152 片全史回填后台跑；**Cookie 自动续票技能 `jq_refresh` 建成**，update.py [0/4] 前置自愈，Cookie 过期不再需要人工换票。战役目标=日频行业归属 → 行业聚合原料（动量/相对强度/热度）→ dig 吃新原料 + ML 复跑验 RankIC 上台阶。前序：ML 二番战 142=46 一字不差（结论31 数量免疫）、聚宽同款引擎对表 IC 互验差 0.7%（结论32），详见 PROJECT.md）
 
 ## 一、我们在做什么（30 秒版）
 
@@ -56,7 +56,7 @@
 ## 五、环境与坑（新会话必读）
 
 - 环境：conda `jaycode` 单环境（jqcli 已 `pip install -e` 集成）；jqcli 在 `.tools/jqcli`；**plotly 必须 <6**（vectorbt 依赖）
-- 取数通道：`research/jq_channel.py`（exec→download→rm 三段式，O_EXCL 独占锁；**同一时刻只允许一个进程走通道**）；Cookie 会过期——`jqcli research exec -c "print(1)" --yes` 探针，失败则让用户重登聚宽更新 `.env` 的 `JQCLI_COOKIE`
+- 取数通道：`research/jq_channel.py`（exec→download→rm 三段式，O_EXCL 独占锁；**同一时刻只允许一个进程走通道**）；Cookie 会过期——**已自愈**：`python -m research.jq_refresh`（密码登录现拉新票并回写 .env 的 JQCLI_COOKIE，账号密码存 .env；失败=聚宽上验证码须人工）；update.py [0/4] 已挂前置调用 `jq_refresh.ensure()`，其它长任务取数前亦建议先 ensure
 - 云端陷阱：jqcli exec 报错 returncode 仍为 0（已在 jq_channel 抛修）；估值/资金流 T+1 出数；`get_valuation` 1 万行静默截断；**量价/龙虎榜晚 8 点后才能抓 T 日（盘中=半天快照毁数据，2026-09-07 事故，update.py CLOSE_HOUR 已机制化，rules 第 7 条）**
 - 财务口径：聚宽利润表/现金流=**年度内累计值**（TTM 换算在 build.py `_fin_prep`）；**期间平移方向是未来函数高发区**（首版写反被茅台对答案当场抓获，教训在 PROJECT.md 下一步#2）；特征生效日=三表 pub_date 取晚
 - 验证纪律：落盘必读回核对范围；OOS 已作废，一切验收用滚动 WFO；重大发现即时归档（rules 第 5 节第 6 条）
@@ -90,5 +90,6 @@ conda run -n jaycode python -m research.dig stats            # 一屏仪表盘�
 bash research/dig_health.sh                  # dig 健康哨兵（cron 每 30min；监工+cron 双哑火的兜底，异常写 data/derived/dig_health.log）
 conda run -n jaycode python -m research.wfo_screen [因子...]  # 候选批量 WFO 清洗（断点续跑，判决在 derived/wfo_screen.jsonl）
 conda run -n jaycode python -m research.famcorr  # 全体 active 因子血缘矩阵（derived/famcorr.json，截面≥300 保护）
+conda run -n jaycode python -m research.jq_refresh  # 聚宽 Cookie 探测/自动续票（--force 无条件重登）
 ```
 ```

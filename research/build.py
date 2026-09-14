@@ -3,7 +3,7 @@
 
 输出（data/derived/，全部 parquet）：
     features.parquet  数值宽表：(date, code) × 特征 + 前瞻标签 fwd_ret_5
-    industry.parquet  行业维表（季末快照，评估端按日 as-of join）
+    industry.parquet  行业维表（日频 PIT，2026-09-14 起源自 industry_daily 全史）
     concept.parquet   概念长表（季末快照原样）：(date, concept, concept_name, code)
     finance.parquet   财务公告合并（pub_date 与报告期分存，L3 按公告日 as-of）
 
@@ -246,6 +246,26 @@ def build_features() -> pd.DataFrame:
         left_on="date_dt", right_on="eff_dt", by="code",
         direction="backward")
 
+    # 行业聚合原料（2026-09-14 批准的行业线）：日频 sw_l1 归属 → 行业动量/热度，
+    # 个股相对行业的位置（强度差、行业内领先度）。行业标签本身是分类非数值，
+    # 进宽表的是聚合后的数值原料；标签给评估端做中性化（走 industry.parquet）。
+    iday = _load_raw("industry_daily")[["day", "code", "sw_l1"]]
+    iday = iday.drop_duplicates(subset=["day", "code"])
+    iday = iday.replace("", np.nan).rename(columns={"day": "date"})
+    d = d.merge(iday, on=["date", "code"], how="left")   # sw_l1 挂上作连接键
+    # 行业日频聚合表（先聚到 (date,行业) 粒度，行业额时序 rolling 天然按日序）
+    g = (d.dropna(subset=["sw_l1"]).groupby(["date", "sw_l1"], sort=True)
+         .agg(ind_r_20d=("r_20d", "mean"), ind_r_1=("r_1", "mean"),
+              _amt=("money", "sum")).reset_index().sort_values(["sw_l1", "date"]))
+    g["ind_amt_5_20"] = (g.groupby("sw_l1", sort=False)["_amt"].transform(
+        lambda s: s.rolling(5).mean())
+        / g.groupby("sw_l1", sort=False)["_amt"].transform(
+            lambda s: s.rolling(20).mean()))
+    d = d.merge(g.drop(columns=["_amt"]), on=["date", "sw_l1"], how="left")
+    d["ind_rs_20d"] = d["r_20d"] - d["ind_r_20d"]        # 相对行业强度差
+    d["ind_lead_20"] = d.groupby(["date", "sw_l1"], dropna=True)[
+        "r_20d"].rank(pct=True)                          # 行业内动量分位
+
     keep = ["date", "code", "close", "post_close", "paused", "high_limit", "low_limit",
             "st_flag",
             "r_1", "r_5d", "r_10d", "r_20d", "r_60d",
@@ -256,6 +276,7 @@ def build_features() -> pd.DataFrame:
             "auc_imb", "auc_money_share", "mt_fin_ratio", "bb_yest",
             "fin_roe_ttm", "fin_gross", "fin_opm", "fin_rev_yoy", "fin_np_yoy",
             "fin_cash_quality", "fin_debt", "fin_cash_asset", "fin_goodwill_eq",
+            "ind_r_20d", "ind_r_1", "ind_amt_5_20", "ind_rs_20d", "ind_lead_20",
             "fwd_ret_5"]
     feat = d[keep].copy()
     feat.to_parquet(derived_dir() / "features.parquet", index=False)
@@ -264,7 +285,10 @@ def build_features() -> pd.DataFrame:
 
 def build_dims() -> None:
     """行业/概念/财务维表（快照形态，as-of 语义由评估端实现，此处不改数据）。"""
-    ind = _load_raw("industry").drop_duplicates(subset=["day", "code"])
+    # 行业维表改用日频 PIT 全史（季末表仅作其历史备份保留在 raw，不再进派生层）；
+    # 空串归 NaN，防评估端把"无行业"当成一个真实分组
+    ind = _load_raw("industry_daily").drop_duplicates(subset=["day", "code"])
+    ind = ind.replace("", np.nan)
     ind = ind.rename(columns={"day": "date"}).sort_values(["code", "date"])
     ind.to_parquet(derived_dir() / "industry.parquet", index=False)
 

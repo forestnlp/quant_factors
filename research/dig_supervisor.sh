@@ -32,6 +32,11 @@ sp() { sleep "$1" & SP=$!; wait "$SP" 2>/dev/null; SP=""; }   # 可中断 sleep
 ts() { date '+%F %T'; }
 fail=0
 while true; do
+  # 暂停开关（cron 分支早有、监工 09-14 补齐：此前 touch 了也拦不住常驻监工）
+  if [ -f data/derived/PAUSE_DIG ]; then
+    echo "[$(ts)] PAUSE_DIG 在 → 监工退出（rm 该文件后 cron 30 分钟内自动拉起）" >> "$LOG"
+    exit 0
+  fi
   if pgrep -f "python -m research\.dig run" >/dev/null; then
     hb_age=$(( $(date +%s) - $(stat -c %Y "$HB" 2>/dev/null || echo 0) ))
     if [ "$hb_age" -gt "$STALE" ]; then

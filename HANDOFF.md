@@ -2,7 +2,7 @@
 
 > 用途：任何新会话恢复任务的唯一入口。PROJECT.md 是现状全貌，本文件是"现在在哪、下一步打什么、怎么打"。
 > 维护纪律：每场战役结束/路线改判/重大发现时更新本文件（与 PROJECT.md 同步），随代码一起提交。
-> 最后更新：2026-09-14 深夜（**行业线第一战役数据层收官（结论33）**：日频 PIT 行业全史 1666 天×793 万行验收三项全绿；宽表 +5 列行业聚合原料（ind_r_20d/ind_r_1/ind_amt_5_20/ind_rs_20d/ind_lead_20），dig 零改动自动吃新矿；**ML 复跑验收中**（判决点=行业正交原料能否让 RankIC 突破 0.114 平台，日志 `data/derived/ml_combo_ind.log`）。**Cookie 自动续票 `jq_refresh` 建成**，update [0/4] 前置自愈；dig 监工补 PAUSE_DIG 开关（此前文档有、代码无）。详见 PROJECT.md 结论31/32/33）
+> 最后更新：2026-09-14 深夜（**解禁数据战役收官（结论34）**：`fetch unlock` 全史 17529 行验收全绿（含 45 行节假日顺延修正），宽表 +3 列解禁原料（`unl_today/unl_sum20/unl_next20`，最后一列是合法前视=日程提前数月公告）；已挂 update 日更。行业线见结论33（+5 列 `ind_*`，dig 下一批起自动吃到）。**ML 判决实验纠偏**：上一轮 ml_combo 复跑其实没吃到原料（特征取自账本因子），已给 ml_combo 加 `--extra/--tag`，真判决 = 145 因子+8 列原料直用（`tag=ml_lgbm_raw`，日志 `data/derived/ml_combo_raw.log`，对照基线 RankIC 0.1143/组合 0.60）。**用户纠错入档**：判"接口不存在"须穷举调用姿势后实测——事件数据走 `finance.run_query(query(finance.STK_xxx))`，顶层 `get_xxx` 查不到不等于取不到。详见 PROJECT.md 结论31/32/33/34）
 
 ## 一、我们在做什么（30 秒版）
 
@@ -10,7 +10,7 @@
 
 ## 二、当前阵地（已验证的事实，可直接信任）
 
-- **数据**：12 数据集 2020-01~2026-09-09（财务三表 2019Q1 起）；宽表 `data/derived/features.parquet` 777 万行 × 38 特征 + 标签，check 体检门全绿（含九节财务体检：BS 恒等式 24.28 万行仅 10 违例）
+- **数据**：13 数据集 2020-01~2026-09-11（财务三表 2019Q1 起、解禁日程 2019-11 起）；宽表 `data/derived/features.parquet` 777 万行 × 46 特征+标签（含行业 5 列、解禁 3 列新矿），check 体检门全绿（含九节财务体检：BS 恒等式 24.28 万行仅 10 违例）
 - **官方答案库**：`data/raw/jq/alpha_ref/` 33 片全历史 alpha101；`derived/alpha_board.csv` 87 因子同口径榜单（auc 入全场 Top12；官方头部=正向结构类，与自家负向量能类互补）
 - **裁判体系**：eval.py（IC/ICIR/分层，秒级）+ backtest.py（vectorbt 组合层，自证与手算误差 2e-16）；对答案获官方盖章（alpha_002/006 Pearson 0.999+）
 - **更新机制**：`python -m research.update --deep` 一键补到最新（断点续跑=更新，实战验证 4 次）；通道独占锁防并发
@@ -91,5 +91,7 @@ bash research/dig_health.sh                  # dig 健康哨兵（cron 每 30min
 conda run -n jaycode python -m research.wfo_screen [因子...]  # 候选批量 WFO 清洗（断点续跑，判决在 derived/wfo_screen.jsonl）
 conda run -n jaycode python -m research.famcorr  # 全体 active 因子血缘矩阵（derived/famcorr.json，截面≥300 保护）
 conda run -n jaycode python -m research.jq_refresh  # 聚宽 Cookie 探测/自动续票（--force 无条件重登）
+conda run -n jaycode python -m research.ml_combo --tag ml_lgbm_raw --extra ind_r_20d,unl_next20  # ML 组合（--extra=宽表原料直用列，--tag=产物名勿覆盖基线）
+# 聚宽取数新通道速记：解禁=fetch unlock；行业日频=fetch industry_daily；事件/财务表=finance.run_query(query(finance.STK_xxx))
 ```
 ```

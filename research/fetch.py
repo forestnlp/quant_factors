@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
+
+import pandas as pd
 from pathlib import Path
 
 from research import jq_channel as jq
@@ -561,6 +563,69 @@ def fetch_industry_daily(start: str, end: str, chunk_days: int = 11,
     print(f"[industry_daily] 覆盖核对: {len(files)} 片, {total} 行")
 
 
+UNLOCK_TMPL = '''# -*- coding: utf-8 -*-
+# 限售解禁日程：区间内全市场解禁事件（day=解禁日, num=解禁股数,
+# rate1=num/总股本, rate2=num/解禁前流通股本——口径已与行情数据对账实证）
+from jqdata import *
+import os
+import pandas as pd
+
+START, END = {start!r}, {end!r}
+os.makedirs("jq_out", exist_ok=True)
+codes = get_all_securities("stock", date=END).index.tolist()
+rows = []
+for i in range(0, len(codes), 1300):
+    r = get_locked_shares(codes[i:i + 1300], start_date=START, end_date=END)
+    if r is not None and len(r):
+        rows.append(r)
+df = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(
+    columns=["day", "code", "num", "rate1", "rate2"])
+df["day"] = pd.to_datetime(df["day"]).dt.strftime("%Y-%m-%d")
+# 解禁日落在休市日（节假日）→ 实际流通顺延至下一交易日（实测占 0.28%，全为节假日）
+td = [str(x) for x in get_trade_days(START, "2099-12-31")]
+import bisect
+def _nxt(d):
+    i = bisect.bisect_left(td, d)   # 当日即交易日→返回自身；休市→下一交易日
+    return td[i] if i < len(td) else ""
+df["next_trading_day"] = df["day"].map(_nxt)
+df = df[["day", "next_trading_day", "code", "num", "rate1", "rate2"]]
+df.to_csv(os.path.join("jq_out", "{fname}"), index=False)
+print("rows=%d codes=%d days=%d" % (len(df), df["code"].nunique(),
+                                    df["day"].nunique()))
+'''
+
+
+def fetch_unlock(start: str, end: str, chunk_months: int = 6,
+                 force: bool = False) -> None:
+    """限售解禁日程 → data/raw/jq/unlock/（每 chunk_months 个月一片，断点续跑）
+    解禁=A股供给侧硬冲击（事件减法候选）；解禁计划提前数月公告，PIT 友好。
+    实测全市场单月批量查 ~1s，体量极小（月均百余事件），半年片绰绰有余。"""
+    out_dir = raw_dir("jq", "unlock")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    months = pd.period_range(start[:7], end[:7], freq="M")
+    spans = []
+    for i in range(0, len(months), chunk_months):
+        ms = months[i:i + chunk_months]
+        s = max(str(ms[0].start_time.date()), start)
+        e = min(str(ms[-1].end_time.date()), end)
+        spans.append((s, e))
+    todo = [(s, e) for s, e in spans
+            if force or not (out_dir / f"unlock_{s}_{e}.csv").exists()]
+    print(f"[unlock] 区间 {start}~{end}（{len(spans)} 片，本次取 {len(todo)}）")
+    for i, (s, e) in enumerate(todo, 1):
+        f = out_dir / f"unlock_{s}_{e}.csv"
+        print(f"  [{i}/{len(todo)}] {s}~{e}", flush=True)
+        try:
+            jq.run_script(UNLOCK_TMPL.format(start=s, end=e, fname=f.name),
+                          f.name, f, timeout=900, exec_timeout=800)
+        except jq.JqAuthError as ex:
+            print(f"  [中止] {ex}")
+            return
+    files = sorted(out_dir.glob("unlock_*.csv"))
+    total = sum(sum(1 for _ in open(x, encoding="utf-8")) - 1 for x in files)
+    print(f"[unlock] 覆盖核对: {len(files)} 片, {total} 行")
+
+
 def fetch_concept(start_year: int, end_year: int, force: bool = False) -> None:
     """概念成分 PIT：每年 4 个季末 × 399 概念 → data/raw/jq/concept/"""
     _fetch_by_year("concept", CONCEPT_YEAR_TMPL, start_year, end_year,
@@ -719,7 +784,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="聚宽取数任务")
     ap.add_argument("task", choices=["calendar", "probe", "daily", "auction",
                                      "valuation", "money_flow", "industry",
-                                     "industry_daily", "concept", "finance",
+                                     "industry_daily", "unlock", "concept",
+                                     "finance",
                                      "finance_bs", "finance_cf", "mtss",
                                      "billboard", "st", "min_agg"])
     ap.add_argument("--start", default="2025-01-04",
@@ -745,6 +811,8 @@ def main() -> None:
         fetch_industry(int(a.start[:4]), int(a.end[:4]), a.force)
     elif a.task == "industry_daily":
         fetch_industry_daily(a.start, a.end, a.chunk_days or 11, a.force)
+    elif a.task == "unlock":
+        fetch_unlock(a.start, a.end, a.chunk_days or 6, a.force)
     elif a.task == "concept":
         fetch_concept(int(a.start[:4]), int(a.end[:4]), a.force)
     elif a.task == "finance":

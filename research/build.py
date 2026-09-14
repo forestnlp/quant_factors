@@ -266,6 +266,24 @@ def build_features() -> pd.DataFrame:
     d["ind_lead_20"] = d.groupby(["date", "sw_l1"], dropna=True)[
         "r_20d"].rank(pct=True)                          # 行业内动量分位
 
+    # 解禁事件原料（2026-09-14 事件减法线）：限售解禁=A股供给侧硬冲击。
+    # 生效日=next_trading_day（节假日顺延，fetch 端已算好）；解禁日程提前
+    # 数月公告 → "未来 20 日解禁量"当日已知，进未来窗不构成未来函数。
+    ul = _load_raw("unlock").drop_duplicates(subset=["day", "code"])
+    ul["date"] = ul["next_trading_day"]
+    ul = ul.dropna(subset=["date"])
+    d = d.merge(ul.groupby(["date", "code"])["rate1"].sum()
+                .rename("unl_today").reset_index(),
+                on=["date", "code"], how="left")
+    d["unl_today"] = d["unl_today"].fillna(0.0)
+    u2 = d[["date", "code", "unl_today"]].sort_values(["code", "date"])
+    gu = u2.groupby("code", sort=False)["unl_today"]
+    u2["unl_sum20"] = gu.transform(lambda s: s.rolling(20, min_periods=1).sum())
+    u2["unl_next20"] = gu.transform(
+        lambda s: s[::-1].rolling(20).sum()[::-1].shift(-1))  # (t, t+20] 和
+    d = d.merge(u2[["date", "code", "unl_sum20", "unl_next20"]],
+                on=["date", "code"], how="left")
+
     keep = ["date", "code", "close", "post_close", "paused", "high_limit", "low_limit",
             "st_flag",
             "r_1", "r_5d", "r_10d", "r_20d", "r_60d",
@@ -277,6 +295,7 @@ def build_features() -> pd.DataFrame:
             "fin_roe_ttm", "fin_gross", "fin_opm", "fin_rev_yoy", "fin_np_yoy",
             "fin_cash_quality", "fin_debt", "fin_cash_asset", "fin_goodwill_eq",
             "ind_r_20d", "ind_r_1", "ind_amt_5_20", "ind_rs_20d", "ind_lead_20",
+            "unl_today", "unl_sum20", "unl_next20",
             "fwd_ret_5"]
     feat = d[keep].copy()
     feat.to_parquet(derived_dir() / "features.parquet", index=False)

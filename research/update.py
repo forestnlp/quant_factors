@@ -56,6 +56,9 @@ DAILY_SETS = {
     "valuation":  (fetch.fetch_valuation, "t1"),
     "money_flow": (fetch.fetch_moneyflow, "t1"),
     "mtss":       (fetch.fetch_mtss, "t1"),
+    # 解禁日程：事件表但向前生长（新公告不断补未来解禁日），取数 ~1s 值得日更；
+    # 非量价快照，无盘中定稿问题，当日可更
+    "unlock":     (fetch.fetch_unlock, "today"),
 }
 
 

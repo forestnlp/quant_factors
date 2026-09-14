@@ -21,6 +21,8 @@
 
 from __future__ import annotations
 
+import argparse
+
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
@@ -37,14 +39,16 @@ LGB = dict(objective="regression", n_estimators=400, learning_rate=0.05,
            verbose=-1)
 
 
-def build() -> tuple[pd.DataFrame, np.ndarray, np.ndarray, list[str]]:
-    """评估样本（可交易+厚截面）× 全体在册因子截面 rank → (dt, X, y, names)。"""
+def build(extra_cols: tuple[str, ...] = ()) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, list[str]]:
+    """评估样本（可交易+厚截面）× 全体在册因子截面 rank → (dt, X, y, names)。
+    extra_cols：宽表里的原料列（如 ind_*/unl_*）直接当特征，不经账本。"""
     lib = factorlib.load()
     names = [n for n, r in lib["factors"].items()
              if r["status"] in ("candidate", "product")]
     f, _ = ev.load()
     wide = set(pq.ParquetFile(derived_dir() / "features.parquet")
                .schema_arrow.names)
+    names += [c for c in extra_cols if c in wide]   # 原料直用（红线圈外：原料进特征≠帮因子过闸）
     mi = pd.MultiIndex.from_arrays([f["date"].values, f["code"].values])
     cols = {}
     for i, n in enumerate(names, 1):
@@ -72,8 +76,17 @@ def build() -> tuple[pd.DataFrame, np.ndarray, np.ndarray, list[str]]:
 
 
 def main() -> None:
-    print("== ml_combo 侦察演习：LightGBM 逐年向前 ==", flush=True)
-    f, X, y, feat_names = build()
+    import json
+    ap = argparse.ArgumentParser(description="ML 组合侦察（LightGBM 逐年向前）")
+    ap.add_argument("--extra", default="",
+                    help="逗号分隔的宽表原料列，直接当特征（如 ind_r_20d,unl_next20）")
+    ap.add_argument("--tag", default="ml_lgbm",
+                    help="产物/回测信号名（对照组用不同 tag，勿覆盖基线）")
+    a = ap.parse_args()
+    extra = tuple(c.strip() for c in a.extra.split(",") if c.strip())
+    print(f"== ml_combo 侦察演习：LightGBM 逐年向前（tag={a.tag}"
+          f"，原料直用 {len(extra)} 列）==", flush=True)
+    f, X, y, feat_names = build(extra)
     dt = pd.to_datetime(f["dt"])
     pred = np.full(len(f), np.nan, dtype="float32")
     for yr in TEST_YEARS:
@@ -88,7 +101,7 @@ def main() -> None:
               f"→ 预测 {te.sum():,} 行（{te_d}）", flush=True)
     out = f.assign(p=pred)
     chk = out[out["p"].notna()]
-    p = alpha.alpha_dir() / "ml_lgbm.parquet"
+    p = alpha.alpha_dir() / f"{a.tag}.parquet"
     chk[["date", "code", "p"]].rename(columns={"p": "value"}
                                       ).to_parquet(p, index=False)
     print(f"合成信号落盘 {p}（{len(chk):,} 行，"
@@ -103,7 +116,7 @@ def main() -> None:
           f"（ICIR年化≈{icir:+.2f}，正率 {(ric > 0).mean():.0%}）", flush=True)
 
     # 回测：与全体单枪同口径（wfo_screen 判决文件里的 full_sharpe 直接可比）
-    cur = wfo._curve("ml_lgbm", 100, 10, reverse=True, band=(0.10, 0.50))
+    cur = wfo._curve(a.tag, 100, 10, reverse=True, band=(0.10, 0.50))
     rows = []
     for yr in wfo.YEARS:
         seg = cur[cur.index.year == yr]

@@ -44,7 +44,7 @@ KEEP = {keep!r}
 os.makedirs("jq_out", exist_ok=True)
 parts = []
 for d in DAYS:
-    df = get_all_alpha_values(d, "101")
+    df = get_all_alpha_values(d, {lib!r})
     df["day"] = d
     parts.append(df.reset_index())
 out = pd.concat(parts, ignore_index=True)
@@ -60,25 +60,26 @@ print("rows=%d cols=%d size=%.1fMB" % (
 
 def fetch_alpha(start: str, end: str, force: bool = False,
                 step: int = STEP, cols: list[str] | None = None,
-                tag: str = "") -> None:
-    """cols=None 取全部 101 支；给定列名列表则只取那些（省 90% 体积）。"""
+                tag: str = "", lib: str = "101") -> None:
+    """cols=None 取全库；给定列名列表则只取那些（省 90% 体积）。lib∈101/191。"""
     out_dir = raw_dir("jq", "alpha_ref")
     out_dir.mkdir(parents=True, exist_ok=True)
     days = jq.trading_days(start, end)[::step]
     chunks = [days[i:i + DATES_PER_CHUNK]
               for i in range(0, len(days), DATES_PER_CHUNK)]
     pref = f"{tag}_" if tag else ""
-    print(f"取数日 {len(days)} 个（步长 {step}），分 {len(chunks)} 片"
+    print(f"取数日 {len(days)} 个（步长 {step}，库 {lib}），分 {len(chunks)} 片"
           f"{'，列白名单 ' + str(len(cols)) + ' 支' if cols else ''}")
     for ch in chunks:
-        fname = f"{pref}alpha101_{ch[0]}_{ch[-1]}.csv"
+        fname = f"{pref}alpha{lib}_{ch[0]}_{ch[-1]}.csv"
         local = out_dir / fname
         if local.exists() and not force:
             continue
         print(f"取 {fname} ...", flush=True)
-        script = ALPHA_TMPL.format(days=ch, keep=cols or [], fname=fname)
+        script = ALPHA_TMPL.format(days=ch, keep=cols or [], lib=lib,
+                                   fname=fname)
         jq.run_script(script, fname, local, timeout=900, exec_timeout=600.0)
-    n = len(list(out_dir.glob(f"{pref}alpha101_2*.csv")))
+    n = len(list(out_dir.glob(f"{pref}alpha{lib}_2*.csv")))
     print(f"完成：{n} 片在盘")
 
 
@@ -92,7 +93,10 @@ if __name__ == "__main__":
     ap.add_argument("--cols", default="",
                     help="列白名单（逗号分隔，如 alpha_016,alpha_088），空=全部")
     ap.add_argument("--tag", default="", help="文件名前缀（区分不同取法）")
+    ap.add_argument("--lib", default="101", choices=["101", "191"],
+                    help="官方因子库（191=Alpha191，2026-09-15 探针实测 188 列非全NaN）")
     a = ap.parse_args()
     jq.check_auth()
     fetch_alpha(a.start, a.end, a.force, a.step,
-                [c.strip() for c in a.cols.split(",") if c.strip()], a.tag)
+                [c.strip() for c in a.cols.split(",") if c.strip()], a.tag,
+                a.lib)

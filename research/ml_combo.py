@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 
 import numpy as np
 import pandas as pd
@@ -29,14 +30,49 @@ import pyarrow.parquet as pq
 import lightgbm as lgb
 
 from research import alpha, eval as ev, factorlib, wfo
-from research.config import derived_dir
+from research.config import derived_dir, raw_dir
 
 TEST_YEARS = [2022, 2023, 2024, 2025, 2026]
 PURGE = pd.Timedelta(days=12)      # 5 交易日标签 + 缓冲的隔离带
+BAND_CUR = (0.10, 0.50)            # 现行选择带（band 战役维持原样）
+BAND_OPEN = (0.0, 1.0)             # 归因臂：全开（结论35：只用于归因，非候选形态）
+OFFICIAL = ["alpha_016", "alpha_088", "alpha_013", "alpha_044", "alpha_040",
+            "alpha_015", "alpha_027", "alpha_050", "alpha_055", "alpha_003",
+            "alpha_026", "alpha_012", "alpha_081", "alpha_094", "alpha_004"]
 LGB = dict(objective="regression", n_estimators=400, learning_rate=0.05,
            num_leaves=63, min_child_samples=10000, feature_fraction=0.7,
            bagging_fraction=0.8, bagging_freq=5, seed=42, n_jobs=-1,
            verbose=-1)
+
+
+def consolidate_top15() -> None:
+    """raw/jq/alpha_ref/top15_alpha101_*.csv → derived/alpha/alpha_XXX.parquet。
+
+    官方原值直取件（B 腿）合片：列名即官方 alpha 名，落成长表后与既有
+    编译产物同构（date/code/value），build() 走同一条 reindex 通道进特征池。
+    读回验证（rules#4/#9）：总行数、区间、逐列非 NaN 率、边界重复值一致性。
+    """
+    files = sorted(glob.glob(str(raw_dir("jq", "alpha_ref")
+                                 / "top15_alpha101_*.csv")))
+    if not files:
+        raise SystemExit("无 top15 分片，先跑 fetch_alpha --tag top15")
+    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    dup = df.duplicated(subset=["day", "code"], keep=False)
+    if dup.any():   # 分片边界重叠须值一致，否则是数据事故
+        bad = (df[dup].groupby(["day", "code"])[OFFICIAL]
+               .nunique().gt(1).any().any())
+        if bad:
+            raise SystemExit(f"分片边界值冲突（{int(dup.sum())} 行），拒收")
+    df = df.drop_duplicates(subset=["day", "code"]).rename(columns={"day": "date"})
+    print(f"合并 {len(files)} 片: {len(df):,} 行 "
+          f"{df['date'].min()}~{df['date'].max()}", flush=True)
+    for c in OFFICIAL:
+        out = df[["date", "code", c]].rename(columns={c: "value"})
+        out = out[out["value"].notna()]
+        out.to_parquet(alpha.alpha_dir() / f"{c}.parquet", index=False)
+        print(f"  {c}: {len(out):,} 行 "
+              f"({len(out) / len(df):.0%} 非空, {out['date'].min()}"
+              f"~{out['date'].max()})", flush=True)
 
 
 def build(extra_cols: tuple[str, ...] = ()) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, list[str]]:
@@ -48,7 +84,9 @@ def build(extra_cols: tuple[str, ...] = ()) -> tuple[pd.DataFrame, np.ndarray, n
     f, _ = ev.load()
     wide = set(pq.ParquetFile(derived_dir() / "features.parquet")
                .schema_arrow.names)
-    names += [c for c in extra_cols if c in wide]   # 原料直用（红线圈外：原料进特征≠帮因子过闸）
+    # 原料直用（红线圈外：原料进特征≠帮因子过闸）+ 官方原值件（alpha_*.parquet）
+    names += [c for c in extra_cols
+              if c in wide or (alpha.alpha_dir() / f"{c}.parquet").exists()]
     mi = pd.MultiIndex.from_arrays([f["date"].values, f["code"].values])
     cols = {}
     for i, n in enumerate(names, 1):
@@ -75,14 +113,94 @@ def build(extra_cols: tuple[str, ...] = ()) -> tuple[pd.DataFrame, np.ndarray, n
     return f, X.to_numpy(), y, names
 
 
+def _train_arm(X: np.ndarray, y: np.ndarray, dt: pd.Series,
+               names: list[str], tag: str, f: pd.DataFrame) -> pd.DataFrame:
+    """单臂逐年向前训练+预测，信号落 derived/alpha/<tag>.parquet，返回预测表。"""
+    pred = np.full(len(f), np.nan, dtype="float32")
+    imp_sum = np.zeros(len(names))
+    for yr in TEST_YEARS:
+        t0 = pd.Timestamp(year=yr, month=1, day=1)
+        tr = ((dt < t0 - PURGE) & np.isfinite(y)).to_numpy()
+        te = (dt.dt.year == yr).to_numpy()   # 只预测本年（防后年模型覆写泄漏）
+        m = lgb.LGBMRegressor(**LGB)
+        m.fit(X[tr], y[tr], feature_name=names)
+        pred[te] = m.predict(X[te]).astype("float32")
+        imp_sum += m.booster_.feature_importance("gain")
+        print(f"  {tag} {yr}: 训练 {tr.sum():,} 行（截至 {dt[tr].max().date()}"
+              f"）→ 预测 {te.sum():,} 行", flush=True)
+    imp = pd.Series(imp_sum, index=names).sort_values(ascending=False)
+    off_rank = [(n, int(imp.index.get_loc(n)) + 1) for n in OFFICIAL
+                if n in imp.index]
+    print(f"  {tag} 官方列 importance 名次: "
+          + ", ".join(f"{n}#{r}" for n, r in sorted(off_rank, key=lambda t: t[1])),
+          flush=True)
+    out = f.assign(p=pred)
+    chk = out[out["p"].notna()]
+    chk[["date", "code", "p"]].rename(columns={"p": "value"}
+                                      ).to_parquet(alpha.alpha_dir() / f"{tag}.parquet",
+                                                   index=False)
+    # 信号体检：测试段逐日 RankIC（预测 vs 实际 5 日收益）
+    ranks = chk.groupby("dt")[["p", ev.LABEL]].rank()
+    ric = ranks.groupby(chk["dt"].values).apply(
+        lambda g: g["p"].corr(g[ev.LABEL])).dropna()
+    print(f"  {tag} RankIC {ric.mean():+.4f}（正率 {(ric > 0).mean():.0%}）",
+          flush=True)
+    return chk
+
+
+def battle() -> None:
+    """收编判决役：同池单变量——特征池 ±官方Top15，双模型 × 双 band 四格。
+
+    归因逻辑（结论35 教训：band 裁判规则可能吃掉新信号的 alpha）：
+      - 主判据 = 现行 band(0.10,0.50] 下 ±官方 的同窗差（对照 0.72 基线口径）
+      - 归因格 = band 全开：若增益只在全开臂显形 → band 重审的又一条证据
+        （全开非候选形态，结论35 已关闭该路线，此格只做归因不产生改线效力）
+    及格参考（HANDOFF#18 跑前写死）：RankIC 破 0.1149 平台；同窗 2022 起
+    对照基线 +16.3%/0.72。侦察定性，产物不入账本，数字照实报。
+    """
+    print("== 收编判决役：±官方 Top15 双臂 ==")
+    consolidate_top15()
+    f, X, y, names = build(OFFICIAL)
+    base_idx = [i for i, n in enumerate(names) if n not in OFFICIAL]
+    print(f"特征池: 在册 {len(base_idx)} + 官方 {len(names) - len(base_idx)}"
+          f" = {len(names)}", flush=True)
+    dt = pd.to_datetime(f["dt"])
+    arms = {
+        "mlb_base": _train_arm(X[:, base_idx], y, dt,
+                               [names[i] for i in base_idx], "mlb_base", f),
+        "mlb_off": _train_arm(X, y, dt, names, "mlb_off", f),
+    }
+    for tag in arms:
+        for band, bname in ((BAND_CUR, "现行band"), (BAND_OPEN, "全开")):
+            cur = wfo._curve(tag, 100, 10, reverse=True, band=band)
+            win = cur[cur.index.year >= 2022]
+            sf, sw = wfo._stats(cur), wfo._stats(win)
+            yrs = " ".join(
+                f"{yr}:{wfo._stats(cur[cur.index.year == yr])['sharpe']:+.2f}"
+                for yr in (2022, 2023, 2024, 2025, 2026))
+            print(f"  {tag:9s} {bname:8s} 全区间 {sf['ann']:+6.1%}/{sf['sharpe']:.2f}"
+                  f" | 同窗2022+ {sw['ann']:+6.1%}/{sw['sharpe']:.2f} | {yrs}",
+                  flush=True)
+
+
 def main() -> None:
     import json
     ap = argparse.ArgumentParser(description="ML 组合侦察（LightGBM 逐年向前）")
     ap.add_argument("--extra", default="",
-                    help="逗号分隔的宽表原料列，直接当特征（如 ind_r_20d,unl_next20）")
+                    help="逗号分隔的宽表原料列或官方 alpha 列，直接当特征")
     ap.add_argument("--tag", default="ml_lgbm",
                     help="产物/回测信号名（对照组用不同 tag，勿覆盖基线）")
+    ap.add_argument("--consolidate", action="store_true",
+                    help="只做 top15 合片+读回验证，不训练")
+    ap.add_argument("--battle", action="store_true",
+                    help="收编判决役：±官方 Top15 双臂 × 双 band 四格")
     a = ap.parse_args()
+    if a.consolidate:
+        consolidate_top15()
+        return
+    if a.battle:
+        battle()
+        return
     extra = tuple(c.strip() for c in a.extra.split(",") if c.strip())
     print(f"== ml_combo 侦察演习：LightGBM 逐年向前（tag={a.tag}"
           f"，原料直用 {len(extra)} 列）==", flush=True)

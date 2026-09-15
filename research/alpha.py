@@ -93,7 +93,9 @@ _OPS = {
                 lambda x, y, n: x.rolling(_win(n)).corr(y)),
     "log":     ([("x", "df")], lambda x: np.log(x.where(x > 0))),
     "abs":     ([("x", "df")], lambda x: x.abs()),
-    "sign":    ([("x", "df")], lambda x: x.sign()),
+    # sign 必须用 np.sign：DataFrame 无 .sign() 方法（Series 才有），x.sign() 一编译即崩
+    # （2026-09-15 官方骨架验证时抓到：白名单里有 sign 却从未真正可用）
+    "sign":    ([("x", "df")], lambda x: np.sign(x)),
     # 逐点非线性（2026-09-11 增）：relu=只取正半边（单边信号）；clip=双边饱和
     "relu":    ([("x", "df")], lambda x: x.clip(lower=0.0)),
     "clip":    ([("x", "df"), ("lo", "num"), ("hi", "num")],

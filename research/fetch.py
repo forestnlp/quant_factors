@@ -120,6 +120,64 @@ print("rows=%d codes=%d days=%d size=%.1fMB" % (
     os.path.getsize(p) / 1048576.0))
 '''
 
+# 日内下午段（13:00~15:00）分钟→日频聚合（2026-09-15 用户拍板开工，HANDOFF#15）。
+# 机理与开盘段（P1 已判死）不同：尾盘拉抬/砸盘含知情交易，收盘集合竞价=机构调仓窗口。
+# 特征原料：午后半日量价结构 + 尾盘30m(14:30起) + 尾盘15m(14:45起) + 收盘竞价(≥14:57)。
+# 探针实测开盘段模板单日全市场 ~40s；下午段多一段竞价 → 预算 ~60s/日，单刀片仍稳。
+MIN_AGG_PM_TMPL = '''# -*- coding: utf-8 -*-
+from jqdata import *
+import os
+import pandas as pd
+
+DAYS = {days!r}
+os.makedirs("jq_out", exist_ok=True)
+# 窗口切点（含）：pm=午后全段 / t30=尾盘30m / t15=尾盘15m / call=收盘集合竞价
+WIN = {{"pm": "14:30", "t30": "14:45", "t15": "15:00"}}
+parts = []
+for d in DAYS:
+    codes = get_all_securities("stock", date=d).index.tolist()
+    seg = []
+    for i in range(0, len(codes), 500):
+        m = get_price(codes[i:i + 500], start_date=d + " 13:00:00",
+                      end_date=d + " 15:00:00", frequency="1m", fq=None,
+                      fields=["open", "close", "high", "low", "volume"],
+                      panel=False, skip_paused=True)
+        if len(m):
+            seg.append(m)
+    if not seg:
+        continue
+    m = pd.concat(seg, ignore_index=True)
+    m["hhmm"] = pd.to_datetime(m["time"]).dt.strftime("%H:%M")
+    rows = []
+    for c, g in m.groupby("code"):
+        t = g["hhmm"]
+        row = dict(day=d, code=c,
+                   o_pm=float(g["open"].iloc[0]),
+                   c_day=float(g["close"].iloc[-1]),
+                   hi_pm=float(g["high"].max()), lo_pm=float(g["low"].min()))
+        w = g[t <= "14:30"]                      # 午后前段（13:00~14:30）
+        row["v_pm"] = float(w["volume"].sum()) if len(w) else 0.0
+        row["c_pm"] = float(w["close"].iloc[-1]) if len(w) else float("nan")
+        for key, lo, hi in [("t30", "14:30", "14:45"), ("t15", "14:45", "15:00")]:
+            w = g[(t > lo) & (t <= hi)]
+            row["v" + key] = float(w["volume"].sum()) if len(w) else 0.0
+            row["c" + key] = float(w["close"].iloc[-1]) if len(w) else float("nan")
+            row["h" + key] = float(w["high"].max()) if len(w) else float("nan")
+            row["l" + key] = float(w["low"].min()) if len(w) else float("nan")
+        w = g[t >= "14:57"]                      # 收盘集合竞价（14:57~15:00 撮合单）
+        row["v_call"] = float(w["volume"].sum()) if len(w) else 0.0
+        row["c_call"] = float(w["close"].iloc[-1]) if len(w) else float("nan")
+        rows.append(row)
+    parts.append(pd.DataFrame(rows))
+df = pd.concat(parts, ignore_index=True)
+df["day"] = df["day"].astype(str).str[:10]
+p = os.path.join("jq_out", "{fname}")
+df.to_csv(p, index=False)
+print("rows=%d codes=%d days=%d size=%.1fMB" % (
+    len(df), df["code"].nunique(), df["day"].nunique(),
+    os.path.getsize(p) / 1048576.0))
+'''
+
 MONEYFLOW_TMPL = '''# -*- coding: utf-8 -*-
 from jqdata import *
 import os
@@ -766,6 +824,14 @@ def fetch_min_agg(start: str, end: str, chunk_days: int = 1,
                   raw_dir("jq", "min_agg"), force)
 
 
+def fetch_min_agg_pm(start: str, end: str, chunk_days: int = 1,
+                     force: bool = False) -> None:
+    """下午段分钟→日频聚合（HANDOFF#15 试点）→ data/raw/jq/min_agg_pm/
+    尾盘/收盘竞价结构原料；单日全市场预算 ~60s，逐日一片、断点续跑。"""
+    _fetch_series("min_agg_pm", MIN_AGG_PM_TMPL, start, end, chunk_days,
+                  raw_dir("jq", "min_agg_pm"), force)
+
+
 def fetch_billboard(start: str, end: str, chunk_days: int = 60,
                     force: bool = False) -> None:
     """龙虎榜 → data/raw/jq/billboard/"""
@@ -787,7 +853,8 @@ def main() -> None:
                                      "industry_daily", "unlock", "concept",
                                      "finance",
                                      "finance_bs", "finance_cf", "mtss",
-                                     "billboard", "st", "min_agg"])
+                                     "billboard", "st", "min_agg",
+                                     "min_agg_pm"])
     ap.add_argument("--start", default="2025-01-04",
                     help="起始日期（industry/concept/finance 任务传年份如 2025）；"
                          "聚宽行情起点为 2005-01-04（官方文档+实测）")
@@ -829,6 +896,8 @@ def main() -> None:
         fetch_st(a.start, a.end, a.chunk_days or 250, a.force)
     elif a.task == "min_agg":
         fetch_min_agg(a.start, a.end, a.chunk_days or 1, a.force)
+    elif a.task == "min_agg_pm":
+        fetch_min_agg_pm(a.start, a.end, a.chunk_days or 1, a.force)
     else:
         fetch_auction(a.start, a.end, a.chunk_days or 10, a.force)
 

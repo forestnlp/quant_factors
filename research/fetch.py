@@ -178,6 +178,28 @@ print("rows=%d codes=%d days=%d size=%.1fMB" % (
     os.path.getsize(p) / 1048576.0))
 '''
 
+# 指数日线（官方 alpha101 复算的基准原料 + 后续择时/风格研究的底料）。
+# 收编战役（2026-09-15）盘点缺口时发现：宽表只有个股，官方公式里的
+# Benchmark(#000300.XSHG) 等无本地对应物 → 补此轻量任务（全史仅几千行）。
+INDEX_DAILY_TMPL = '''# -*- coding: utf-8 -*-
+from jqdata import *
+import os
+import pandas as pd
+
+DAYS = {days!r}
+os.makedirs("jq_out", exist_ok=True)
+IDX = ["000001.XSHG", "000300.XSHG", "000905.XSHG", "000852.XSHG", "399006.XSHE"]
+df = get_price(IDX, start_date=DAYS[0], end_date=DAYS[-1],
+               fields=["open", "close", "high", "low", "volume", "money"],
+               panel=False)
+df = df.rename(columns={{"time": "day"}})
+df["day"] = df["day"].astype(str).str[:10]
+p = os.path.join("jq_out", "{fname}")
+df.to_csv(p, index=False)
+print("rows=%d idx=%d size=%.2fMB" % (
+    len(df), df["code"].nunique(), os.path.getsize(p) / 1048576.0))
+'''
+
 MONEYFLOW_TMPL = '''# -*- coding: utf-8 -*-
 from jqdata import *
 import os
@@ -653,6 +675,108 @@ print("rows=%d codes=%d days=%d" % (len(df), df["code"].nunique(),
 '''
 
 
+# 股东增减持（内部人交易）：pub_date=公告日（PIT 锚点），type=增持/减持，
+# change_ratio=变动占总股本比例。字段清单经云端实测定档（2026-09-15 探针4）。
+HOLDER_CHG_TMPL = '''# -*- coding: utf-8 -*-
+from jqdata import *
+from jqdata import finance
+import os
+import pandas as pd
+
+START, END = {start!r}, {end!r}
+os.makedirs("jq_out", exist_ok=True)
+T = finance.STK_SHAREHOLDERS_SHARE_CHANGE
+# run_query 单次上限 5000 行（实测：半年片 14/15 片恰好 5000=截断铁证）
+# → 按 id 稳定排序 + offset 分页，直到某页 <PAGE
+PAGE = 4000
+rows = []
+offset = 0
+while True:
+    q = (query(T.code, T.pub_date, T.end_date, T.type, T.shareholder_name,
+               T.change_number, T.change_ratio, T.after_change_ratio)
+         .filter(T.pub_date >= START, T.pub_date <= END)
+         .order_by(T.id).limit(PAGE).offset(offset))
+    part = finance.run_query(q)
+    if part is None or part.empty:
+        break
+    rows.append(part)
+    if len(part) < PAGE:
+        break
+    offset += PAGE
+df = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(
+    columns=["code", "pub_date", "end_date", "type", "shareholder_name",
+             "change_number", "change_ratio", "after_change_ratio"])
+df["pub_date"] = pd.to_datetime(df["pub_date"]).dt.strftime("%Y-%m-%d")
+df["end_date"] = pd.to_datetime(df["end_date"], errors="coerce"
+                                ).dt.strftime("%Y-%m-%d")
+df.to_csv(os.path.join("jq_out", "{fname}"), index=False)
+print("rows=%d codes=%d" % (len(df), df["code"].nunique()))
+'''
+
+# 股权质押明细：pub_date=公告日，pledge_number=质押股数，
+# pledge_item_ratio 等字段以实测为准（探针4 只确认了前 12 列）。
+PLEDGE_TMPL = '''# -*- coding: utf-8 -*-
+from jqdata import *
+from jqdata import finance
+import os
+import pandas as pd
+
+START, END = {start!r}, {end!r}
+os.makedirs("jq_out", exist_ok=True)
+T = finance.STK_SHARES_PLEDGE
+# 全字段查询（该表仅前 12 列经实测定档，不猜字段名；体量小全带无妨）
+# 同上分页防 5000 行截断（季度探针 2276 行，全史部分年份可能翻倍）
+PAGE = 4000
+rows = []
+offset = 0
+while True:
+    q = (query(T).filter(T.pub_date >= START, T.pub_date <= END)
+         .order_by(T.id).limit(PAGE).offset(offset))
+    part = finance.run_query(q)
+    if part is None or part.empty:
+        break
+    rows.append(part)
+    if len(part) < PAGE:
+        break
+    offset += PAGE
+df = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(
+    columns=["code", "pub_date"])
+for c in df.columns:
+    if c.endswith("date") and df[c].dtype == object:
+        df[c] = pd.to_datetime(df[c], errors="coerce").dt.strftime("%Y-%m-%d")
+df.to_csv(os.path.join("jq_out", "{fname}"), index=False)
+print("rows=%d codes=%d" % (len(df), df["code"].nunique()))
+'''
+
+
+def _fetch_event_chunked(name: str, tmpl: str, start: str, end: str,
+                         chunk_months: int, out_dir, force: bool) -> None:
+    """事件表通用回填（公告日过滤、按月片、断点续跑）：unlock/增减持/质押同款。"""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    months = pd.period_range(start[:7], end[:7], freq="M")
+    spans = []
+    for i in range(0, len(months), chunk_months):
+        ms = months[i:i + chunk_months]
+        s = max(str(ms[0].start_time.date()), start)
+        e = min(str(ms[-1].end_time.date()), end)
+        spans.append((s, e))
+    todo = [(s, e) for s, e in spans
+            if force or not (out_dir / f"{name}_{s}_{e}.csv").exists()]
+    print(f"[{name}] 区间 {start}~{end}（{len(spans)} 片，本次取 {len(todo)}）")
+    for i, (s, e) in enumerate(todo, 1):
+        f = out_dir / f"{name}_{s}_{e}.csv"
+        print(f"  [{i}/{len(todo)}] {s}~{e}", flush=True)
+        try:
+            jq.run_script(tmpl.format(start=s, end=e, fname=f.name),
+                          f.name, f, timeout=900, exec_timeout=800)
+        except jq.JqAuthError as ex:
+            print(f"  [中止] {ex}")
+            return
+    files = sorted(out_dir.glob(f"{name}_*.csv"))
+    total = sum(sum(1 for _ in open(x, encoding="utf-8")) - 1 for x in files)
+    print(f"[{name}] 覆盖核对: {len(files)} 片, {total} 行")
+
+
 def fetch_unlock(start: str, end: str, chunk_months: int = 6,
                  force: bool = False) -> None:
     """限售解禁日程 → data/raw/jq/unlock/（每 chunk_months 个月一片，断点续跑）
@@ -682,6 +806,22 @@ def fetch_unlock(start: str, end: str, chunk_months: int = 6,
     files = sorted(out_dir.glob("unlock_*.csv"))
     total = sum(sum(1 for _ in open(x, encoding="utf-8")) - 1 for x in files)
     print(f"[unlock] 覆盖核对: {len(files)} 片, {total} 行")
+
+
+def fetch_holder_chg(start: str, end: str, chunk_months: int = 6,
+                     force: bool = False) -> None:
+    """股东增减持 → data/raw/jq/holder_chg/（按 pub_date 公告日过滤，PIT 友好）
+    增持=内部人正面信号、减持=负面（事件减法弹药）；2026-09-15 探针实测出数。"""
+    _fetch_event_chunked("holder_chg", HOLDER_CHG_TMPL, start, end,
+                         chunk_months, raw_dir("jq", "holder_chg"), force)
+
+
+def fetch_pledge(start: str, end: str, chunk_months: int = 3,
+                 force: bool = False) -> None:
+    """股权质押明细 → data/raw/jq/pledge/（按 pub_date 公告日过滤）
+    高比例质押=爆仓螺旋风险（事件减法候选）；表名 STK_SHARES_PLEDGE 系翻案所得。"""
+    _fetch_event_chunked("pledge", PLEDGE_TMPL, start, end,
+                         chunk_months, raw_dir("jq", "pledge"), force)
 
 
 def fetch_concept(start_year: int, end_year: int, force: bool = False) -> None:
@@ -846,6 +986,13 @@ def fetch_st(start: str, end: str, chunk_days: int = 250,
                   raw_dir("jq", "st"), force)
 
 
+def fetch_index_daily(start: str, end: str, chunk_days: int = 250,
+                      force: bool = False) -> None:
+    """指数日线（官方 alpha 复算基准+风格底料）→ data/raw/jq/index_daily/"""
+    _fetch_series("index_daily", INDEX_DAILY_TMPL, start, end, chunk_days,
+                  raw_dir("jq", "index_daily"), force)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="聚宽取数任务")
     ap.add_argument("task", choices=["calendar", "probe", "daily", "auction",
@@ -854,7 +1001,8 @@ def main() -> None:
                                      "finance",
                                      "finance_bs", "finance_cf", "mtss",
                                      "billboard", "st", "min_agg",
-                                     "min_agg_pm"])
+                                     "min_agg_pm", "index_daily",
+                                     "holder_chg", "pledge"])
     ap.add_argument("--start", default="2025-01-04",
                     help="起始日期（industry/concept/finance 任务传年份如 2025）；"
                          "聚宽行情起点为 2005-01-04（官方文档+实测）")
@@ -898,6 +1046,12 @@ def main() -> None:
         fetch_min_agg(a.start, a.end, a.chunk_days or 1, a.force)
     elif a.task == "min_agg_pm":
         fetch_min_agg_pm(a.start, a.end, a.chunk_days or 1, a.force)
+    elif a.task == "index_daily":
+        fetch_index_daily(a.start, a.end, a.chunk_days or 250, a.force)
+    elif a.task == "holder_chg":
+        fetch_holder_chg(a.start, a.end, a.chunk_days or 6, a.force)
+    elif a.task == "pledge":
+        fetch_pledge(a.start, a.end, a.chunk_days or 3, a.force)
     else:
         fetch_auction(a.start, a.end, a.chunk_days or 10, a.force)
 

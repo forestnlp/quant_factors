@@ -59,6 +59,11 @@ DAILY_SETS = {
     # 解禁日程：事件表但向前生长（新公告不断补未来解禁日），取数 ~1s 值得日更；
     # 非量价快照，无盘中定稿问题，当日可更
     "unlock":     (fetch.fetch_unlock, "today"),
+    # 指数日线：官方 alpha 复算的基准原料（2026-09-15 收编战役）；收盘价收盘定稿
+    "index_daily": (fetch.fetch_index_daily, "close"),
+    # 股东增减持/质押：公告日过滤的事件表（公告多在盘后，晚间取当日即得）
+    "holder_chg": (fetch.fetch_holder_chg, "today"),
+    "pledge":     (fetch.fetch_pledge, "today"),
 }
 
 

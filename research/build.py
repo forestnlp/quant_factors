@@ -284,6 +284,68 @@ def build_features() -> pd.DataFrame:
     d = d.merge(u2[["date", "code", "unl_sum20", "unl_next20"]],
                 on=["date", "code"], how="left")
 
+    # 增减持/质押事件原料（2026-09-16 减法二役）：pub_date=公告日 PIT 生效。
+    # 雷1修复（读回验证抓到）：公告常在周末/停盘日，宽表只有交易日行——
+    # 精确日期 merge 会整行丢事件（质押覆盖只剩 47%）。→ 公告日映射到
+    # "≥公告日的第一个交易日"生效（周末公告周一开盘前已知，无未来函数），
+    # 与解禁 next_trading_day 同口径。
+    # 雷2修复：change_ratio 有 465% 级脏行 → clip(0, 20)（结论37 约定的
+    # build 端截断，p99.9=4.95，截断只影响 0.01% 行）。
+    tds = np.sort(d["date"].unique())          # 宽表交易日（str，已升序）
+
+    def _to_tday(s: pd.Series) -> pd.Series:
+        idx = np.searchsorted(tds, s.values, side="left")
+        ok = idx < len(tds)
+        out = pd.Series(np.where(ok, tds[np.clip(idx, 0, len(tds) - 1)],
+                                 np.nan), index=s.index)
+        return out
+
+    hc = _load_raw("holder_chg")
+    hc["date"] = _to_tday(pd.to_datetime(hc["pub_date"])
+                          .dt.strftime("%Y-%m-%d").astype("object"))
+    hc["change_ratio"] = hc["change_ratio"].clip(0, 20)   # 脏行截断
+    hc = hc.dropna(subset=["date", "change_ratio"]).drop_duplicates(
+        subset=["code", "date", "type"])
+    for typ, col in ((1, "hc_reduce1"), (0, "hc_in1")):   # 1=减持 0=增持
+        h = (hc[hc["type"] == typ]
+             .groupby(["date", "code"])["change_ratio"].max()
+             .rename(col).reset_index())
+        d = d.merge(h, on=["date", "code"], how="left")
+        d[col] = d[col].fillna(0.0)
+    h2 = d[["date", "code", "hc_reduce1", "hc_in1"]].sort_values(["code", "date"])
+    gh = h2.groupby("code", sort=False)
+    h2["hc_reduce20"] = gh["hc_reduce1"].transform(
+        lambda s: s.rolling(20, min_periods=1).sum())
+    h2["hc_in20"] = gh["hc_in1"].transform(
+        lambda s: s.rolling(20, min_periods=1).sum())
+    d = d.merge(h2[["date", "code", "hc_reduce20", "hc_in20"]],
+                on=["date", "code"], how="left")
+
+    # 质押：pledge_total_ratio=公告日累计质押占比(%)，公告生效向后沿用
+    # （ffill=公告后可知，无未来函数）；pg_new20=近20日新增质押市值/日均成交额
+    # （雷3修复：mv 除零出 inf → 分母 where(>0) 置 NaN 再 fillna(0)）。
+    pg = _load_raw("pledge")
+    pg["date"] = _to_tday(pd.to_datetime(pg["pub_date"], errors="coerce")
+                          .dt.strftime("%Y-%m-%d").astype("object"))
+    pg = pg.dropna(subset=["date"])
+    pg1 = pg[["date", "code", "pledge_total_ratio"]].dropna()
+    pg1 = (pg1.groupby(["date", "code"])["pledge_total_ratio"].max()
+           .clip(lower=0).rename("pg_ratio0").reset_index())
+    d = d.merge(pg1, on=["date", "code"], how="left")
+    pg2 = pg[["date", "code", "pledge_number"]].dropna()
+    pg2 = pg2.merge(d[["date", "code", "close"]], on=["date", "code"], how="left")
+    pg2["pg_amt"] = pg2["pledge_number"] * pg2["close"]   # 公告质押市值(元)
+    pg_new = (pg2.groupby(["date", "code"])["pg_amt"].sum()
+              .rename("pg_new1").reset_index())
+    d = d.merge(pg_new, on=["date", "code"], how="left")
+    d = d.sort_values(["code", "date"], kind="mergesort")
+    gd = d.groupby("code", sort=False)
+    d["pg_ratio"] = gd["pg_ratio0"].ffill()
+    mv = gd["money"].transform(
+        lambda s: s.rolling(20, min_periods=5).mean()).where(lambda x: x > 0)
+    d["pg_new20"] = (gd["pg_new1"].transform(
+        lambda s: s.rolling(20, min_periods=1).sum()) / mv).fillna(0.0)
+
     keep = ["date", "code", "close", "post_close", "paused", "high_limit", "low_limit",
             "st_flag",
             "r_1", "r_5d", "r_10d", "r_20d", "r_60d",
@@ -296,6 +358,7 @@ def build_features() -> pd.DataFrame:
             "fin_cash_quality", "fin_debt", "fin_cash_asset", "fin_goodwill_eq",
             "ind_r_20d", "ind_r_1", "ind_amt_5_20", "ind_rs_20d", "ind_lead_20",
             "unl_today", "unl_sum20", "unl_next20",
+            "hc_reduce20", "hc_in20", "pg_ratio", "pg_new20",
             "fwd_ret_5"]
     feat = d[keep].copy()
     feat.to_parquet(derived_dir() / "features.parquet", index=False)

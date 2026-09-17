@@ -53,8 +53,9 @@ def _refresh_alpha(col: str) -> None:
 
 
 def build(col: str, k: int, rebal: int, reverse: bool,
-          band: tuple[float, float]) -> dict:
-    _refresh_alpha(col)                  # 产物滞后宽表 → 先重编译（防旧因子出旧单）
+          band: tuple[float, float], skip_refresh: bool = False) -> dict:
+    if not skip_refresh:
+        _refresh_alpha(col)              # 产物滞后宽表 → 先重编译（防旧因子出旧单）
     bt.FEATURE_COLS = [col]            # load_pivots 按此加载（宽表列或 alpha 产物）
     _, tradable, feat = bt.load_pivots()
     w = bt.topk_weights(feat, col, k, tradable, rebal,

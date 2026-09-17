@@ -130,7 +130,27 @@ L4 挖掘层    LLM 假设器（白名单 pandas 表达式）← 失败案例回
 - **AKShare 申万行业映射/指数**（曾用于 `data/industry_map`）：`pip install akshare`，接口 `ak.sw_index_first_info()` / `ak.index_hist_sw()`。弃用原因：上游源不稳定（券商评测稳定性 2.41/5），行业改走聚宽 `get_industry(date=)` PIT。
 
 
-## 引擎模块（`research/`，当前仅第一阶段所需）
+## 引擎模块（`research/`，25 支全景图，2026-09-17 梳理）
+
+**一条流水线看懂全部模块**（数据自上而下流，判决层在下游）：
+
+```
+取数       jq_channel → fetch / fetch_alpha / jq_refresh（认证自愈）
+             ↓ raw 落盘（断点续跑）
+质检       check（体检门，取数后必跑）
+             ↓
+特征       build（日频宽表）→ build_min（分钟派生特征，P1 战役）
+             ↓
+因子生产   alpha（DSL 编译器）← dig（LLM 自动挖掘，配 dig_supervisor.sh/dig_health.sh）
+           factorlib（账本）  alpha_board（官方榜对表）
+             ↓
+判决       eval（IC 裁判）→ backtest（组合裁判）→ wfo（滚动验证）
+           wfo_screen（批量清洗）→ famcorr（血缘矩阵）→ sentinel（退火哨兵）
+             ↓
+组合/产品  ml_combo（ML 组合器 lgb/xgb）→ signals（每日荐股）
+           synth（等权合成器）/ timing（择时层，预注册件）
+日常       update（一键日更）
+```
 
 | 模块 | 职责 |
 |---|---|
@@ -145,6 +165,21 @@ L4 挖掘层    LLM 假设器（白名单 pandas 表达式）← 失败案例回
 | `alpha.py` | **L4 表达式编译器**（工具契约层）：白名单 DSL（列名 + 算术 + rank 截面 + delay/delta/ts_* 时序 + log/abs/sign）经 AST 校验后执行——LLM 产出物唯一的入口，杜绝任意代码执行与未来函数；产物 `derived/alpha/<name>.parquet`（date/code/value），与宽表列同契约进 eval |
 | `factorlib.py` | **私有因子库机器账本**（`derived/factorlib.json`）：档案（表达式/假设/eval 摘要/组合成绩/状态）+ 状态机（candidate→product→retired/rejected，非法流转拒绝）+ 去重索引（exprs 子命令供假设器查重）；FACTORS.md 是它的人读镜像 |
 | `sentinel.py` | **淘汰哨兵**：在库 candidate/product 因子用最近 250 交易日复算中性 RankIC/ICIR，方向翻转判 die、强度跌破地板判 decay，`--apply` 自动退役并记录原因；有事非零退出供上层感知 |
+| `dig.py` | **L4 自动挖掘回路**：propose→compile→judge→memorize 全自动闭环，只在"提假设"节点调本地 Qwen；七形态对策逐条落码（InfraError 中止整轮、秩相关>0.9 换皮拒收、只回喂 IS 数字、机制连败拉黑、硬预算停机、dig_log.jsonl 心跳）；2026-09-17 起 prompt 内嵌"深度思考四步法"、MAX_TOKENS=32000。配套 shell：`dig_supervisor.sh`（崩了拉起）/ `dig_health.sh`（心跳体检） |
+| `jq_refresh.py` | 聚宽 Cookie 自动续期：jqcli `auth login` 用户名密码重登，Cookie 回写 .env（治"研究平台会话被回收"老毛病，取数链自愈环节） |
+| `build_min.py` | **分钟聚合→日内日频特征**（P1 风向标战役）：`raw/jq/min_agg/` 云端聚合的开盘/下午窗口量价 → alpha 契约长表（m_gap3/m_pull30/m_vconc3 等窗口内自洽比值，无未来函数），eval/backtest/wfo 按名自动加载 |
+| `alpha_board.py` | alpha101 官方基线榜单（对答案参照系）：`raw/jq/alpha_ref/` 324 采样日 82 因子，与 eval 完全同口径，按 |IS ICIR| 排序，产出 `derived/alpha_board.csv` |
+| `wfo.py` | **WFO 驱动器（验证协议 v2 执行者）**：`years`=单因子逐年成绩（回答"是不是只在某几年灵"）；`rotate`=滚动年度选枪（每年只用过去的数据从池里选 Sharpe 最高者），预注册及格线写死在本文件（逐年 Sharpe>0 ≥4/6、非单年贡献过半） |
+| `wfo_screen.py` | 候选大清洗：全部 candidate 批量过 WFO 同一道门（治 dig 的 IS 线在 7×24 轰炸下失效的候选通胀），只判决不改状态，人工过目后 `factorlib set-status` 执行 |
+| `famcorr.py` | 候选家族血缘矩阵：全体 candidate+product 日截面秩相关（逐对跨日最大 |Spearman|），量出每支枪与最近血缘/与在役产品的重复度，供"留谁并谁"决策，产出 `derived/famcorr.json` |
+| `ml_combo.py` | **ML 因子组合器**：全体在册因子日截面 rank 进特征池、fwd_ret_5 rank 做标签，逐年向前（隔离带防泄漏）合成信号塞回 WFO 同口径回测；`--model lgb|xgb` 双裁判（2026-09-17 XGB 同池终裁获胜，RankIC 0.1166/同窗 +15.9%/0.71）；产物 `derived/alpha/mlb_*.parquet` 走 alpha 契约 |
+| `synth.py` | 多因子合成器（打分层基线）：成员逐日截面 rank→方向对齐→z-score→按族权重求和（"|"分族防同原料刷分），产物写 alpha 契约可被 backtest/eval/wfo 当普通因子直接用 |
+| `timing.py` | 仓位择时层（预注册 2026-09-08）：等权指数>MA(N) 满仓否则降档，PIT shift(1)、网格 N∈{20,60,120}×off∈{0,0.5}、只看 IS 选优——现状：判关闭候复议 |
+| `signals.py` | **每日荐股层（产品二）**：直接调 `backtest.topk_weights`（与回测同一实现），持仓=数据纯函数，输出应持仓清单+买卖动作；`build(col,...,skip_refresh=True)` 供 ML 合成信号（无表达式）跳过重编译 |
+| `update.py` | **一键日更**：刷日历→各数据集按分片文件名解析缺口只补增量（幂等、分片只追加）→三档出数节奏（close 档 `CLOSE_HOUR` 晚 8 点门槛，治"盘中快照当收盘"事故）；夜间链 `data/derived/nightly.sh` v2 串 update→check→build→荐股 |
+| `jqfa_check.py` | 对表体检：项目内隔离 venv（`.tools/jqfa-venv`）跑聚宽同款开源 jqfactor_analyzer，与我方 eval 指标对比盖章；全程本地、不上传（规则 8） |
+
+`__init__.py` 为包标记。其余零散 py：`data/derived/` 下 20 支（absorb2 / band_retrial2 / subtraction2 / csi500_test / pm_probe / probe_* / xgb_report / gen_factor_doc 等）是**一次性战役执行器**——每支对应一场预注册判决的现场代码（收编、band 重审、减法、宇宙缩窄、涨停生态、下午段侦察……），判决结论已归档 PROJECT.md，脚本本身作为判决档案配套保留不删、不入库（data/ 区 gitignore）。日常只需认识上表 24 支。
 
 评估（`factor_eval`）、因子库（`factor_lib`）、挖掘（`factor_miner`）、LLM 客户端（`llm_client`）等模块属于后续阶段，已在 git `42fc087` 保留，待特征底座成型后按需重写，不提前搬回。
 

@@ -138,7 +138,10 @@ def _train_arm(X: np.ndarray, y: np.ndarray, dt: pd.Series,
         tr = ((dt < t0 - PURGE) & np.isfinite(y)).to_numpy()
         te = (dt.dt.year == yr).to_numpy()   # 只预测本年（防后年模型覆写泄漏）
         m = _mk(model)
-        m.fit(X[tr], y[tr], feature_name=names)
+        if model == "lgb":
+            m.fit(X[tr], y[tr], feature_name=names)   # lgb 支持具名特征
+        else:
+            m.fit(X[tr], y[tr])                        # xgb.fit 无 feature_name
         pred[te] = m.predict(X[te]).astype("float32")
         if model == "lgb":
             imp_sum += m.booster_.feature_importance("gain")
@@ -232,7 +235,10 @@ def main() -> None:
         tr = ((dt < t0 - PURGE) & np.isfinite(y)).to_numpy()
         te = (dt.dt.year == yr).to_numpy()   # 只预测本年（防后年模型覆写泄漏）
         m = _mk(a.model)
-        m.fit(X[tr], y[tr], feature_name=feat_names)
+        if a.model == "lgb":
+            m.fit(X[tr], y[tr], feature_name=feat_names)
+        else:
+            m.fit(X[tr], y[tr])
         pred[te] = m.predict(X[te]).astype("float32")
         tr_d, te_d = dt[tr].max().date(), f"{dt[te].min().date()}~{dt[te].max().date()}"
         print(f"  {yr}: 训练 {tr.sum():,} 行（截至 {tr_d}，留隔离带）"

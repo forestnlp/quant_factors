@@ -43,6 +43,12 @@ LGB = dict(objective="regression", n_estimators=400, learning_rate=0.05,
            num_leaves=63, min_child_samples=10000, feature_fraction=0.7,
            bagging_fraction=0.8, bagging_freq=5, seed=42, n_jobs=-1,
            verbose=-1)
+# XGBoost 对照臂超参（2026-09-17 用户点名试 XGB）：与 LGB 等强度对齐——
+# max_depth=6≈num_leaves63；min_child_weight=10000≈min_child_samples（回归
+# hessian=1 时同义）；subsample/colsample 对应 bagging/feature_fraction。
+XGB = dict(objective="reg:squarederror", n_estimators=400, learning_rate=0.05,
+           max_depth=6, min_child_weight=10000, subsample=0.8,
+           colsample_bytree=0.7, tree_method="hist", seed=42, n_jobs=-1)
 
 
 def consolidate_top15() -> None:
@@ -113,8 +119,17 @@ def build(extra_cols: tuple[str, ...] = ()) -> tuple[pd.DataFrame, np.ndarray, n
     return f, X.to_numpy(), y, names
 
 
+def _mk(model: str):
+    """模型工厂：lgb=现役基线；xgb=等强度对照臂（用户点名，超参见 XGB 注释）。"""
+    if model == "xgb":
+        import xgboost as xgb
+        return xgb.XGBRegressor(**XGB)
+    return lgb.LGBMRegressor(**LGB)
+
+
 def _train_arm(X: np.ndarray, y: np.ndarray, dt: pd.Series,
-               names: list[str], tag: str, f: pd.DataFrame) -> pd.DataFrame:
+               names: list[str], tag: str, f: pd.DataFrame,
+               model: str = "lgb") -> pd.DataFrame:
     """单臂逐年向前训练+预测，信号落 derived/alpha/<tag>.parquet，返回预测表。"""
     pred = np.full(len(f), np.nan, dtype="float32")
     imp_sum = np.zeros(len(names))
@@ -122,10 +137,13 @@ def _train_arm(X: np.ndarray, y: np.ndarray, dt: pd.Series,
         t0 = pd.Timestamp(year=yr, month=1, day=1)
         tr = ((dt < t0 - PURGE) & np.isfinite(y)).to_numpy()
         te = (dt.dt.year == yr).to_numpy()   # 只预测本年（防后年模型覆写泄漏）
-        m = lgb.LGBMRegressor(**LGB)
+        m = _mk(model)
         m.fit(X[tr], y[tr], feature_name=names)
         pred[te] = m.predict(X[te]).astype("float32")
-        imp_sum += m.booster_.feature_importance("gain")
+        if model == "lgb":
+            imp_sum += m.booster_.feature_importance("gain")
+        else:
+            imp_sum += np.asarray(m.feature_importances_)
         print(f"  {tag} {yr}: 训练 {tr.sum():,} 行（截至 {dt[tr].max().date()}"
               f"）→ 预测 {te.sum():,} 行", flush=True)
     imp = pd.Series(imp_sum, index=names).sort_values(ascending=False)
@@ -186,6 +204,8 @@ def battle() -> None:
 def main() -> None:
     import json
     ap = argparse.ArgumentParser(description="ML 组合侦察（LightGBM 逐年向前）")
+    ap.add_argument("--model", default="lgb", choices=["lgb", "xgb"],
+                    help="组合器：lgb=现役基线；xgb=对照臂（同池同种子）")
     ap.add_argument("--extra", default="",
                     help="逗号分隔的宽表原料列或官方 alpha 列，直接当特征")
     ap.add_argument("--tag", default="ml_lgbm",
@@ -211,7 +231,7 @@ def main() -> None:
         t0 = pd.Timestamp(year=yr, month=1, day=1)
         tr = ((dt < t0 - PURGE) & np.isfinite(y)).to_numpy()
         te = (dt.dt.year == yr).to_numpy()   # 只预测本年（防后年模型覆写泄漏）
-        m = lgb.LGBMRegressor(**LGB)
+        m = _mk(a.model)
         m.fit(X[tr], y[tr], feature_name=feat_names)
         pred[te] = m.predict(X[te]).astype("float32")
         tr_d, te_d = dt[tr].max().date(), f"{dt[te].min().date()}~{dt[te].max().date()}"

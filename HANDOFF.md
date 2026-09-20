@@ -107,3 +107,6 @@ conda run -n jaycode python -m research.ml_combo --tag ml_lgbm_raw --extra ind_r
 # 聚宽取数新通道速记：解禁=fetch unlock；行业日频=fetch industry_daily；事件/财务表=finance.run_query(query(finance.STK_xxx))
 ```
 ```
+
+23. **夜间链排程事故已修（2026-09-20，结论54④）**：crontab 已补 `5 20 * * 1-5 data/derived/nightly.sh`（此前 09-18/19 断更=只手动验证过首考从未挂排程）。验证自动化=等一次真实自动触发查日志，勿以手动跑通充数。
+24. **待用户拍板的役（弹药备好，预注册书随点随写）**：①确认跟踪役（结论52/54：F3=+8.7%/0.61 dd-14.4%、Calmar 0.60 首超基线；预注册变量 k∈{3,5}×追踪倍数{2.5x,8x}，确认阈值 1σ 写死禁调参）；②水下金叉事件役（结论49）；③制度清洗 PASS/FAIL 清单过目（wfo_screen 后台跑完自动接 famcorr，产物 derived/wfo_screen.jsonl）。

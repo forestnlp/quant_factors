@@ -346,6 +346,70 @@ def build_features() -> pd.DataFrame:
     d["pg_new20"] = (gd["pg_new1"].transform(
         lambda s: s.rolling(20, min_periods=1).sum()) / mv).fillna(0.0)
 
+    # 预期域原料（2026-09-20 AKShare 战役，HANDOFF#25/结论56）：业绩预告+
+    # 快报是铁顶外第一个新信息域。东财 6 码转聚宽后缀（6→XSHG、0/3→XSHE，
+    # 8/4 开头北交所不在宇宙剔除）；公告日→≥公告日第一个交易日生效（_to_tday
+    # 同 holder_chg 口径，无未来函数）。yjyg 一票多行（多指标）→ 只取归母净利
+    # 润主口径；变动幅度 clip(-100, 300) 截脏行（基数近零会出千分位假值）。
+    def _ak_code(s: pd.Series) -> pd.Series:
+        c = s.astype("int64").astype(str).str.zfill(6)
+        suf = np.where(c.str[0] == "6", ".XSHG",
+                       np.where(c.str[0].isin(["0", "3"]), ".XSHE", ""))
+        return c + suf
+
+    yg = pd.concat([pd.read_csv(f) for f in
+                    sorted(glob.glob(str(raw_dir("ak", "yjyg") / "*.csv")))],
+                   ignore_index=True)
+    yg = yg[yg["预测指标"].str.contains("归属于", na=False)].copy()
+    yg["code"] = _ak_code(yg["股票代码"])
+    yg = yg[yg["code"].str.endswith((".XSHG", ".XSHE"))]
+    yg["date"] = _to_tday(pd.to_datetime(yg["公告日期"], errors="coerce")
+                          .dt.strftime("%Y-%m-%d").astype("object"))
+    yg = yg.dropna(subset=["date"])
+    POS = ("预增", "略增", "扭亏", "续盈")
+    NEG = ("预减", "略减", "首亏", "增亏")
+    yg["ep_pos"] = np.where(yg["预告类型"].isin(POS), 1.0,
+                            np.where(yg["预告类型"].isin(NEG), -1.0, np.nan))
+    yg["ep_amp"] = pd.to_numeric(yg["业绩变动幅度"], errors="coerce"
+                                 ).clip(-100, 300)
+    # 同日多事件取幅度绝对值最大的一条（信息量最大者代表）
+    yg["_ab"] = yg["ep_amp"].abs()
+    yg1 = (yg.sort_values("_ab", ascending=False)
+           .drop_duplicates(subset=["date", "code"])
+           [["date", "code", "ep_pos", "ep_amp"]])
+    d = d.merge(yg1, on=["date", "code"], how="left")
+    d["ep_amp_src"] = d["ep_amp"]     # 保留 NaN 语义（ffill 兑现差用，不进宽表）
+    d[["ep_pos", "ep_amp"]] = d[["ep_pos", "ep_amp"]].fillna(0.0)
+    e2 = d[["date", "code", "ep_pos", "ep_amp"]].sort_values(["code", "date"])
+    ge = e2.groupby("code", sort=False)
+    e2["ep_cnt20"] = ge["ep_pos"].transform(
+        lambda s: (s != 0).rolling(20, min_periods=1).sum())
+    d = d.merge(e2[["date", "code", "ep_cnt20"]], on=["date", "code"],
+                how="left")
+    # 快报兑现差（PEAD 核心料）：快报净利同比 − 该股此前预告幅度（预告 ffill
+    # 后 shift(1)：只用公告日之前的预告信息，PIT 安全）。预告在快报前数月
+    # 公告、快报是其硬兑现 → "实际 − 预告"=超预期/不及预期信号。
+    kb = pd.concat([pd.read_csv(f) for f in
+                    sorted(glob.glob(str(raw_dir("ak", "yjkb") / "*.csv")))],
+                   ignore_index=True)
+    kb["code"] = _ak_code(kb["股票代码"])
+    kb = kb[kb["code"].str.endswith((".XSHG", ".XSHE"))]
+    kb["date"] = _to_tday(pd.to_datetime(kb["公告日期"], errors="coerce")
+                          .dt.strftime("%Y-%m-%d").astype("object"))
+    kb = kb.dropna(subset=["date"])
+    kb["kb_np_yoy"] = pd.to_numeric(kb["净利润-同比增长"], errors="coerce"
+                                    ).clip(-100, 300)
+    kb1 = (kb.sort_values("kb_np_yoy", key=lambda s: s.abs(), ascending=False)
+           .drop_duplicates(subset=["date", "code"])
+           [["date", "code", "kb_np_yoy"]])
+    d = d.merge(kb1, on=["date", "code"], how="left")
+    d["kb_np_yoy"] = d["kb_np_yoy"].fillna(0.0)
+    d = d.sort_values(["code", "date"], kind="mergesort")
+    gk = d.groupby("code", sort=False)
+    amp_prev = gk["ep_amp_src"].ffill().shift(1)   # 公告前最近一次预告幅度
+    d["ep_surprise"] = np.where(d["kb_np_yoy"] != 0,
+                                d["kb_np_yoy"] - amp_prev, np.nan)
+
     keep = ["date", "code", "close", "post_close", "paused", "high_limit", "low_limit",
             "st_flag",
             "r_1", "r_5d", "r_10d", "r_20d", "r_60d",
@@ -359,6 +423,7 @@ def build_features() -> pd.DataFrame:
             "ind_r_20d", "ind_r_1", "ind_amt_5_20", "ind_rs_20d", "ind_lead_20",
             "unl_today", "unl_sum20", "unl_next20",
             "hc_reduce20", "hc_in20", "pg_ratio", "pg_new20",
+            "ep_pos", "ep_amp", "ep_cnt20", "kb_np_yoy", "ep_surprise",
             "fwd_ret_5"]
     feat = d[keep].copy()
     feat.to_parquet(derived_dir() / "features.parquet", index=False)

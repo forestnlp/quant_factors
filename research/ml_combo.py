@@ -207,11 +207,12 @@ def battle() -> None:
 def main() -> None:
     import json
     ap = argparse.ArgumentParser(description="ML 组合侦察（LightGBM 逐年向前）")
-    ap.add_argument("--model", default="lgb", choices=["lgb", "xgb"],
-                    help="组合器：lgb=现役基线；xgb=对照臂（同池同种子）")
+    ap.add_argument("--model", default="xgb", choices=["lgb", "xgb"],
+                    help="组合器：xgb=现役基线（09-20 转正，HANDOFF#20）；"
+                         "lgb=旧基线（对照用）")
     ap.add_argument("--extra", default="",
                     help="逗号分隔的宽表原料列或官方 alpha 列，直接当特征")
-    ap.add_argument("--tag", default="ml_lgbm",
+    ap.add_argument("--tag", default="mlb_xgb",
                     help="产物/回测信号名（对照组用不同 tag，勿覆盖基线）")
     ap.add_argument("--consolidate", action="store_true",
                     help="只做 top15 合片+读回验证，不训练")
